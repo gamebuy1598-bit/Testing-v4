@@ -1,1332 +1,1040 @@
-// ═══════════════════════════════════════════════════════════
-//   ✨ NEXUS GUARDIAN ✨ - Advanced Discord Bot
-//   All-in-one: Moderation, Tickets, Giveaways, Utility
-// ═══════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════
+//  🌟 ULTIMATE DISCORD BOT - SINGLE FILE EDITION
+//  Features: Activity Tracking, Rewards, Economy, Fun, Moderation
+// ═══════════════════════════════════════════════════════════════
 
 require('dotenv').config();
 const {
   Client, GatewayIntentBits, Partials, EmbedBuilder, ActionRowBuilder,
-  ButtonBuilder, ButtonStyle, StringSelectMenuBuilder, StringSelectMenuOptionBuilder,
-  PermissionFlagsBits, ChannelType, Collection, ActivityType, AttachmentBuilder,
-  ModalBuilder, TextInputBuilder, TextInputStyle
+  ButtonBuilder, ButtonStyle, SlashCommandBuilder, REST, Routes,
+  PermissionFlagsBits, ActivityType, Collection
 } = require('discord.js');
-const axios = require('axios');
-const QRCode = require('qr-image');
-const ms = require('ms');
 const fs = require('fs');
+const path = require('path');
 
-// ═══════════════════════════════════════════════════════════
-//   DATABASE (JSON file based - no extra files needed)
-// ═══════════════════════════════════════════════════════════
-const DB_FILE = './database.json';
-let db = {
-  warnings: {},      // { guildId: { userId: [{ reason, mod, time, id }] } }
-  whitelist: {},     // { guildId: [userId] }
-  badwords: {},      // { guildId: [words] }
-  afk: {},           // { userId: { reason, time, guild } }
-  reminders: [],     // [{ userId, channelId, time, message }]
-  giveaways: {},     // { messageId: {...} }
-  tickets: {},       // { channelId: { user, type, claimed, ratings } }
-  stats: {},         // { guildId: { tickets, giveaways, warnings } }
-  birthdays: {},     // { guildId: { userId: "MM-DD" } }
-  starboard: {},     // { messageId: originalMessageId }
-  customCmds: {},    // { guildId: { name: { response } } }
-  suggestions: {},   // { messageId: { up, down, author } }
-  tickets_counter: 0,
-  dm_logs: []
+// ═══════════════ CONFIG FROM .env ═══════════════
+const CONFIG = {
+  TOKEN: process.env.TOKEN,
+  CLIENT_ID: process.env.CLIENT_ID,
+  GUILD_ID: process.env.GUILD_ID,
+  BOT_NAME: process.env.BOT_NAME || 'Ultimate Bot',
+  BOT_COLOR: process.env.BOT_COLOR || '#5865F2',
+  BOT_FOOTER: process.env.BOT_FOOTER || 'Powered by Ultimate Bot ✨',
+  BOT_THUMBNAIL: process.env.BOT_THUMBNAIL || '',
+  PREFIX: process.env.BOT_PREFIX || '!',
+  DAILY_MIN: parseInt(process.env.DAILY_REWARD_MIN) || 50,
+  DAILY_MAX: parseInt(process.env.DAILY_REWARD_MAX) || 200,
+  DAILY_COOLDOWN: parseInt(process.env.DAILY_COOLDOWN_HOURS) || 24,
+  INACTIVE_DAYS: parseInt(process.env.INACTIVE_DAYS) || 7,
+  AUTO_KICK: process.env.AUTO_KICK_ENABLED === 'true',
+  KICK_DAYS: parseInt(process.env.KICK_AFTER_DAYS) || 14,
+  ANIMATIONS: process.env.ENABLE_ANIMATIONS !== 'false',
+  ANIM_SPEED: parseInt(process.env.ANIMATION_SPEED) || 1500,
+  ANNOUNCE_CH: process.env.ANNOUNCE_CHANNEL_ID || '',
+  LOG_CH: process.env.LOG_CHANNEL_ID || '',
+  WELCOME_CH: process.env.WELCOME_CHANNEL_ID || '',
 };
 
-if (fs.existsSync(DB_FILE)) {
-  try { db = { ...db, ...JSON.parse(fs.readFileSync(DB_FILE, 'utf8')) }; } catch (e) {}
+// ═══════════════ DATA STORAGE (JSON file) ═══════════════
+const DATA_FILE = path.join(__dirname, 'bot_data.json');
+let DB = {
+  users: {},          // { userId: { coins, lastDaily, lastActivity, streak, warnings, xp, level } }
+  settings: {},       // { guildId: { autoKick } }
+  activity: {},       // { guildId: { userId: lastMessageTimestamp } }
+};
+
+function loadDB() {
+  try {
+    if (fs.existsSync(DATA_FILE)) {
+      DB = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
+      if (!DB.users) DB.users = {};
+      if (!DB.settings) DB.settings = {};
+      if (!DB.activity) DB.activity = {};
+    }
+  } catch (e) { console.error('DB Load Error:', e); }
 }
-const saveDB = () => fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2));
-setInterval(saveDB, 30000); // autosave
 
-// ═══════════════════════════════════════════════════════════
-//   CONFIG FROM .env
-// ═══════════════════════════════════════════════════════════
-const CFG = {
-  token: process.env.BOT_TOKEN,
-  name: process.env.BOT_NAME || '✨ Nexus Guardian ✨',
-  status: process.env.BOT_STATUS || '🛡️ Protecting your server',
-  statusType: process.env.BOT_STATUS_TYPE || 'WATCHING',
-  prefix: process.env.BOT_PREFIX || '!',
-  color: parseInt((process.env.BOT_COLOR || '#5865F2').replace('#', ''), 16),
-  footer: process.env.BOT_FOOTER || 'Powered by Nexus Guardian',
-  ownerId: process.env.OWNER_ID || '',
-  modLog: process.env.MOD_LOG_CHANNEL || '',
-  msgLog: process.env.MESSAGE_LOG_CHANNEL || '',
-  joinLog: process.env.JOIN_LOG_CHANNEL || '',
-  dmLog: process.env.DM_LOG_CHANNEL || '',
-  welcomeCh: process.env.WELCOME_CHANNEL || '',
-  goodbyeCh: process.env.GOODBYE_CHANNEL || '',
-  welcomeMsg: process.env.WELCOME_MESSAGE || 'Welcome {user} to **{server}**! 🎉',
-  goodbyeMsg: process.env.GOODBYE_MESSAGE || '**{user}** has left the server. 👋',
-  autoRole: process.env.AUTO_ROLE_ID || '',
-  starboard: process.env.STARBOARD_CHANNEL || '',
-  starEmoji: process.env.STARBOARD_EMOJI || '⭐',
-  starThreshold: parseInt(process.env.STARBOARD_THRESHOLD || '3'),
-  suggestionCh: process.env.SUGGESTION_CHANNEL || '',
-  ticketCat: process.env.TICKET_CATEGORY || '',
-  ticketLog: process.env.TICKET_LOG_CHANNEL || '',
-  ticketRole: process.env.TICKET_SUPPORT_ROLE || '',
-  antiNuke: process.env.ANTI_NUKE === 'true',
-  antiSpam: process.env.ANTI_SPAM === 'true',
-  spamThreshold: parseInt(process.env.SPAM_THRESHOLD || '5'),
-  spamInterval: parseInt(process.env.SPAM_INTERVAL || '3000'),
-  nukeThreshold: parseInt(process.env.NUKE_THRESHOLD || '3'),
-  nukeInterval: parseInt(process.env.NUKE_INTERVAL || '10000'),
-  timezone: process.env.TIMEZONE || 'Asia/Kolkata',
-  weatherKey: process.env.WEATHER_API_KEY || ''
-};
+function saveDB() {
+  try { fs.writeFileSync(DATA_FILE, JSON.stringify(DB, null, 2)); }
+  catch (e) { console.error('DB Save Error:', e); }
+}
 
-// ═══════════════════════════════════════════════════════════
-//   CLIENT SETUP
-// ═══════════════════════════════════════════════════════════
+loadDB();
+
+// ═══════════════ USER HELPERS ═══════════════
+function getUser(id) {
+  if (!DB.users[id]) {
+    DB.users[id] = {
+      coins: 0, lastDaily: 0, lastActivity: Date.now(),
+      streak: 0, warnings: 0, xp: 0, level: 1, totalMessages: 0
+    };
+  }
+  return DB.users[id];
+}
+
+function addCoins(id, amount) {
+  const u = getUser(id);
+  u.coins += amount;
+  return u.coins;
+}
+
+function addXP(id, amount) {
+  const u = getUser(id);
+  u.xp += amount;
+  const needed = u.level * 100;
+  if (u.xp >= needed) {
+    u.xp -= needed;
+    u.level++;
+    return true; // leveled up
+  }
+  return false;
+}
+
+// ═══════════════ UTILITIES ═══════════════
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+function randomInt(min, max) {
+  return Math.floor(Math.random() * (max - min + 1)) + min;
+}
+
+function pickRandom(arr) {
+  return arr[Math.floor(Math.random() * arr.length)];
+}
+
+// ═══════════════ EMBED BUILDER ═══════════════
+function embed({ title, description, color, fields, thumbnail, image, footer, author, timestamp = true }) {
+  const e = new EmbedBuilder()
+    .setColor(color || CONFIG.BOT_COLOR)
+    .setFooter({ text: footer || CONFIG.BOT_FOOTER, iconURL: CONFIG.BOT_THUMBNAIL || undefined });
+  if (title) e.setTitle(title);
+  if (description) e.setDescription(description);
+  if (fields) e.addFields(fields);
+  if (thumbnail) e.setThumbnail(thumbnail);
+  if (image) e.setImage(image);
+  if (author) e.setAuthor(author);
+  if (timestamp) e.setTimestamp();
+  return e;
+}
+
+// ═══════════════ ANIMATED SEND ═══════════════
+async function animatedSend(channel, embedData, frames = 3) {
+  if (!CONFIG.ANIMATIONS) return channel.send({ embeds: [embedData] });
+
+  const spinnerFrames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+  const msg = await channel.send({
+    embeds: [embed({
+      title: `${spinnerFrames[0]} Loading...`,
+      description: 'Just a moment...',
+      color: CONFIG.BOT_COLOR,
+    })]
+  });
+
+  for (let i = 0; i < spinnerFrames.length; i++) {
+    await sleep(80);
+    try {
+      await msg.edit({
+        embeds: [embed({
+          title: `${spinnerFrames[i]} Loading...`,
+          description: 'Just a moment...',
+          color: CONFIG.BOT_COLOR,
+        })]
+      });
+    } catch {}
+  }
+
+  await msg.edit({ embeds: [embedData] });
+  return msg;
+}
+
+// ═══════════════ PROGRESS BAR ═══════════════
+function progressBar(current, max, size = 12) {
+  const filled = Math.round((current / max) * size);
+  return '█'.repeat(filled) + '░'.repeat(size - filled);
+}
+
+// ═══════════════ RANDOM DATA ═══════════════
+const FUN_FACTS = [
+  '🐙 Octopuses have three hearts and blue blood!',
+  '🍯 Honey never spoils. Archaeologists have found 3000-year-old honey in Egyptian tombs that is still edible!',
+  '🌌 A day on Venus is longer than its year!',
+  '🦈 Sharks existed before trees. They\'ve been around for over 400 million years!',
+  '🧠 Your brain generates about 20 watts of electricity — enough to power a dim light bulb!',
+  '🐝 A single bee can visit up to 5,000 flowers in a single day!',
+  '🌊 The ocean covers 71% of Earth but we\'ve explored less than 5% of it!',
+  '⚡ A bolt of lightning is 5 times hotter than the surface of the sun!',
+  '🐌 Snails can sleep for up to 3 years!',
+  '🎈 Bananas are berries, but strawberries aren\'t!',
+  '🦋 Butterflies taste with their feet!',
+  '🌙 The Moon is drifting away from Earth at about 3.8 cm per year!',
+  '🐘 Elephants are the only animals that can\'t jump!',
+  '🍎 Apples float in water because they\'re 25% air!',
+  '🐜 Ants can lift 50 times their own body weight!',
+];
+
+const QUOTES = [
+  '✨ "The only way to do great work is to love what you do." — Steve Jobs',
+  '🔥 "Success is not final, failure is not fatal: it is the courage to continue that counts." — Winston Churchill',
+  '💫 "Believe you can and you\'re halfway there." — Theodore Roosevelt',
+  '🚀 "The future belongs to those who believe in the beauty of their dreams." — Eleanor Roosevelt',
+  '💪 "Don\'t watch the clock; do what it does. Keep going." — Sam Levenson',
+  '🌟 "Everything you\'ve ever wanted is on the other side of fear." — George Addair',
+  '🌱 "The best time to plant a tree was 20 years ago. The second best time is now." — Chinese Proverb',
+  '⚡ "Your limitation—it\'s only your imagination." — Unknown',
+  '🎯 "Push yourself, because no one else is going to do it for you." — Unknown',
+  '🏆 "Great things never come from comfort zones." — Unknown',
+  '💎 "Dream it. Wish it. Do it." — Unknown',
+  '🌈 "Success doesn\'t just find you. You have to go out and get it." — Unknown',
+];
+
+const TRIVIA = [
+  { q: 'What is the capital of France?', a: ['Paris', 'London', 'Berlin', 'Madrid'], correct: 0 },
+  { q: 'Which planet is known as the Red Planet?', a: ['Venus', 'Mars', 'Jupiter', 'Saturn'], correct: 1 },
+  { q: 'What is the largest ocean on Earth?', a: ['Atlantic', 'Indian', 'Arctic', 'Pacific'], correct: 3 },
+  { q: 'Who painted the Mona Lisa?', a: ['Van Gogh', 'Picasso', 'Da Vinci', 'Michelangelo'], correct: 2 },
+  { q: 'What is the chemical symbol for gold?', a: ['Go', 'Gd', 'Au', 'Ag'], correct: 2 },
+  { q: 'How many continents are there?', a: ['5', '6', '7', '8'], correct: 2 },
+  { q: 'What is the fastest land animal?', a: ['Lion', 'Cheetah', 'Tiger', 'Horse'], correct: 1 },
+  { q: 'Which gas do plants absorb?', a: ['Oxygen', 'Nitrogen', 'CO2', 'Hydrogen'], correct: 2 },
+  { q: 'How many sides does a hexagon have?', a: ['5', '6', '7', '8'], correct: 1 },
+  { q: 'What is the smallest prime number?', a: ['0', '1', '2', '3'], correct: 2 },
+];
+
+const HUG_MSGS = [
+  '🤗 **{a}** gives **{b}** a warm, cozy hug!',
+  '💞 **{a}** wraps **{b}** in a big bear hug!',
+  '🫂 **{a}** hugs **{b}** tightly!',
+  '💖 **{a}** sends **{b}** a super soft hug!',
+];
+
+const WAVE_MSGS = [
+  '👋 **{a}** waves at **{b}**!',
+  '🌊 **{a}** waves happily to **{b}**!',
+  '✋ **{a}** gives **{b}** a friendly wave!',
+];
+
+const HIGHFIVE_MSGS = [
+  '🙌 **{a}** high-fives **{b}**! *SMACK!*',
+  '✋💥 **{a}** and **{b}** high-five!',
+  '🎉 **{a}** gives **{b}** an epic high-five!',
+];
+
+const EIGHTBALL = [
+  '🎱 It is certain.', '🎱 Without a doubt.', '🎱 Yes — definitely.',
+  '🎱 You may rely on it.', '🎱 Most likely.', '🎱 Outlook good.',
+  '🎱 Signs point to yes.', '🎱 Reply hazy, try again.',
+  '🎱 Ask again later.', '🎱 Cannot predict now.',
+  '🎱 Don\'t count on it.', '🎱 My reply is no.',
+  '🎱 Very doubtful.', '🎱 Outlook not so good.',
+];
+
+// ═══════════════ COMMANDS DEFINITION ═══════════════
+const commands = [
+  new SlashCommandBuilder().setName('daily').setDescription('Claim your daily reward!'),
+  new SlashCommandBuilder().setName('balance').setDescription('Check your coin balance'),
+  new SlashCommandBuilder().setName('profile').setDescription('View your profile')
+    .addUserOption(o => o.setName('user').setDescription('User to view')),
+  new SlashCommandBuilder().setName('trivia').setDescription('Play a trivia question!'),
+  new SlashCommandBuilder().setName('funfact').setDescription('Get a random fun fact!'),
+  new SlashCommandBuilder().setName('quote').setDescription('Get a motivational quote!'),
+  new SlashCommandBuilder().setName('coinflip').setDescription('Flip a coin!'),
+  new SlashCommandBuilder().setName('dice').setDescription('Roll a dice!')
+    .addIntegerOption(o => o.setName('sides').setDescription('Number of sides (default 6)').setMinValue(2).setMaxValue(100)),
+  new SlashCommandBuilder().setName('8ball').setDescription('Ask the magic 8-ball!')
+    .addStringOption(o => o.setName('question').setDescription('Your question').setRequired(true)),
+  new SlashCommandBuilder().setName('hug').setDescription('Hug someone!')
+    .addUserOption(o => o.setName('user').setDescription('User to hug').setRequired(true)),
+  new SlashCommandBuilder().setName('wave').setDescription('Wave at someone!')
+    .addUserOption(o => o.setName('user').setDescription('User to wave at').setRequired(true)),
+  new SlashCommandBuilder().setName('highfive').setDescription('High-five someone!')
+    .addUserOption(o => o.setName('user').setDescription('User to high-five').setRequired(true)),
+
+  // Activity
+  new SlashCommandBuilder().setName('nactive').setDescription('List inactive members'),
+  new SlashCommandBuilder().setName('resetactivity').setDescription('Reset a user\'s activity')
+    .addUserOption(o => o.setName('user').setDescription('User').setRequired(true))
+    .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
+  new SlashCommandBuilder().setName('setinactive').setDescription('Set a user as inactive')
+    .addUserOption(o => o.setName('user').setDescription('User').setRequired(true))
+    .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
+
+  // Moderation
+  new SlashCommandBuilder().setName('warn').setDescription('Warn a user')
+    .addUserOption(o => o.setName('user').setDescription('User to warn').setRequired(true))
+    .addStringOption(o => o.setName('reason').setDescription('Reason'))
+    .setDefaultMemberPermissions(PermissionFlagsBits.ModerateMembers),
+  new SlashCommandBuilder().setName('warnings').setDescription('Check warnings for a user')
+    .addUserOption(o => o.setName('user').setDescription('User').setRequired(true)),
+  new SlashCommandBuilder().setName('togglekick').setDescription('Toggle auto-kick of inactive members')
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+  new SlashCommandBuilder().setName('announce').setDescription('Send an announcement')
+    .addStringOption(o => o.setName('message').setDescription('Message to announce').setRequired(true))
+    .addChannelOption(o => o.setName('channel').setDescription('Target channel'))
+    .setDefaultMemberPermissions(PermissionFlagsBits.ManageMessages),
+
+  // Info
+  new SlashCommandBuilder().setName('serverinfo').setDescription('Server information'),
+  new SlashCommandBuilder().setName('botinfo').setDescription('Bot information'),
+  new SlashCommandBuilder().setName('leaderboard').setDescription('Top 10 richest users'),
+  new SlashCommandBuilder().setName('help').setDescription('Show all commands'),
+].map(c => c.toJSON());
+
+// ═══════════════ CLIENT ═══════════════
 const client = new Client({
   intents: [
-    GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers,
-    GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent,
-    GatewayIntentBits.GuildModeration, GatewayIntentBits.GuildInvites,
-    GatewayIntentBits.GuildEmojisAndStickers, GatewayIntentBits.GuildWebhooks,
-    GatewayIntentBits.DirectMessages, GatewayIntentBits.GuildMessageReactions,
-    GatewayIntentBits.GuildVoiceStates, GatewayIntentBits.GuildPresences
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMembers,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent,
+    GatewayIntentBits.GuildPresences,
   ],
-  partials: [Partials.Message, Partials.Channel, Partials.Reaction, Partials.GuildMember, Partials.User]
+  partials: [Partials.Channel, Partials.Message, Partials.User, Partials.GuildMember],
 });
 
-// ═══════════════════════════════════════════════════════════
-//   UTILITIES
-// ═══════════════════════════════════════════════════════════
-const animEmojis = ['⏳', '⌛', '🔄', '💫', '✨', '🌟', '⭐'];
-const animLine = '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━';
+// ═══════════════ ACTIVITY TRACKING (on message) ═══════════════
+client.on('messageCreate', async (message) => {
+  if (message.author.bot || !message.guild) return;
 
-const baseEmbed = (title, desc, color) => new EmbedBuilder()
-  .setTitle(title || null)
-  .setDescription(desc || null)
-  .setColor(color || CFG.color)
-  .setFooter({ text: `${CFG.footer} • ${animEmojis[Math.floor(Math.random()*animEmojis.length)]}` })
-  .setTimestamp();
+  const uid = message.author.id;
+  const gid = message.guild.id;
+  const now = Date.now();
 
-const successEmbed = (title, desc) => baseEmbed(`✅ ${title}`, desc, 0x57F287);
-const errorEmbed = (title, desc) => baseEmbed(`❌ ${title}`, desc, 0xED4245);
-const warnEmbed = (title, desc) => baseEmbed(`⚠️ ${title}`, desc, 0xFEE75C);
-const infoEmbed = (title, desc) => baseEmbed(`ℹ️ ${title}`, desc, 0x5865F2);
+  if (!DB.activity[gid]) DB.activity[gid] = {};
+  DB.activity[gid][uid] = now;
 
-const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+  const u = getUser(uid);
+  u.lastActivity = now;
+  u.totalMessages = (u.totalMessages || 0) + 1;
 
-const isWhitelisted = (guildId, userId) =>
-  db.whitelist[guildId]?.includes(userId) || userId === CFG.ownerId;
+  // XP per message (random 5-15)
+  const leveledUp = addXP(uid, randomInt(5, 15));
 
-const hasPerm = (member, perm) => member.permissions.has(perm) || isWhitelisted(member.guild.id, member.id);
+  if (leveledUp && CONFIG.ANIMATIONS) {
+    try {
+      const msg = await message.reply({
+        embeds: [embed({
+          title: '🎉 LEVEL UP!',
+          description: `**${message.author.username}** reached **Level ${u.level}**!`,
+          color: '#FFD700',
+          thumbnail: message.author.displayAvatarURL({ dynamic: true }),
+        })]
+      });
+      setTimeout(() => msg.delete().catch(() => {}), 8000);
+    } catch {}
+  }
 
-async function sendLog(guild, channelId, embed) {
-  if (!channelId) return;
-  try {
-    const ch = guild.channels.cache.get(channelId);
-    if (ch) await ch.send({ embeds: [embed] });
-  } catch (e) {}
-}
+  // Save periodically
+  if (Math.random() < 0.05) saveDB();
+});
 
-async function dmUser(user, embed) {
-  try { await user.send({ embeds: [embed] }); return true; } catch { return false; }
-}
-
-// ═══════════════════════════════════════════════════════════
-//   READY EVENT
-// ═══════════════════════════════════════════════════════════
+// ═══════════════ READY EVENT ═══════════════
 client.once('ready', async () => {
-  console.log(`
-╔═══════════════════════════════════════════╗
-   ✨ ${CFG.name} is ONLINE!
-   🤖 Logged in as: ${client.user.tag}
-   📊 Serving ${client.guilds.cache.size} guilds
-   👥 ${client.users.cache.size} users
-╚═══════════════════════════════════════════╝
-  `);
-  const typeMap = { PLAYING: 0, STREAMING: 1, LISTENING: 2, WATCHING: 3, COMPETING: 5 };
+  console.log(`\n╔════════════════════════════════════════╗`);
+  console.log(`║  ✅ ${CONFIG.BOT_NAME} is ONLINE!`);
+  console.log(`║  🤖 Logged in as: ${client.user.tag}`);
+  console.log(`║  🌐 Servers: ${client.guilds.cache.size}`);
+  console.log(`╚════════════════════════════════════════╝\n`);
+
   client.user.setPresence({
-    activities: [{ name: CFG.status, type: typeMap[CFG.statusType] ?? 3 }],
-    status: 'online'
+    activities: [{ name: '✨ /help for commands', type: ActivityType.Watching }],
+    status: 'online',
   });
 
-  // Start reminder checker
-  setInterval(checkReminders, 30000);
-  // Start giveaway ender
-  setInterval(checkGiveaways, 15000);
-  // Birthday checker (runs once a day)
-  setInterval(checkBirthdays, 3600000);
+  // Register slash commands
+  const rest = new REST({ version: '10' }).setToken(CONFIG.TOKEN);
+  try {
+    if (CONFIG.GUILD_ID) {
+      await rest.put(Routes.applicationGuildCommands(CONFIG.CLIENT_ID, CONFIG.GUILD_ID), { body: commands });
+      console.log('✅ Slash commands registered (guild).');
+    } else {
+      await rest.put(Routes.applicationCommands(CONFIG.CLIENT_ID), { body: commands });
+      console.log('✅ Slash commands registered (global).');
+    }
+  } catch (e) {
+    console.error('❌ Command registration failed:', e);
+  }
 });
 
-// ═══════════════════════════════════════════════════════════
-//   MESSAGE CREATE - MAIN HANDLER
-// ═══════════════════════════════════════════════════════════
-const spamTracker = new Map();
-const nukeTracker = new Map();
+// ═══════════════ INTERACTION HANDLER ═══════════════
+client.on('interactionCreate', async (interaction) => {
+  try {
+    if (interaction.isButton()) return handleButton(interaction);
+    if (!interaction.isChatInputCommand()) return;
 
-client.on('messageCreate', async (message) => {
-  if (!message.guild || message.author.bot) return;
+    const { commandName: cmd } = interaction;
 
-  // Anti-link (normal users can't post links)
-  if (message.content.match(/https?:\/\/\S+/gi)) {
-    if (!hasPerm(message.member, PermissionFlagsBits.ManageMessages)) {
-      try {
-        await message.delete();
-        const w = await message.channel.send({ embeds: [warnEmbed('Links Not Allowed', `${message.author}, normal members cannot post links here!`)] });
-        setTimeout(() => w.delete().catch(()=>{}), 5000);
-        return;
-      } catch {}
-    }
-  }
+    // ═══ DAILY ═══
+    if (cmd === 'daily') {
+      const uid = interaction.user.id;
+      const u = getUser(uid);
+      const now = Date.now();
+      const cdMs = CONFIG.DAILY_COOLDOWN * 60 * 60 * 1000;
 
-  // Bad words filter
-  const bads = db.badwords[message.guild.id] || [];
-  if (bads.length) {
-    const lower = message.content.toLowerCase();
-    if (bads.some(w => lower.includes(w.toLowerCase()))) {
-      try {
-        await message.delete();
-        const w = await message.channel.send({ embeds: [warnEmbed('Bad Word Detected', `${message.author}, watch your language!`)] });
-        setTimeout(() => w.delete().catch(()=>{}), 5000);
-        return;
-      } catch {}
-    }
-  }
-
-  // Anti-spam
-  if (CFG.antiSpam && !hasPerm(message.member, PermissionFlagsBits.ManageMessages)) {
-    const key = `${message.guild.id}-${message.author.id}`;
-    const now = Date.now();
-    const arr = (spamTracker.get(key) || []).filter(t => now - t < CFG.spamInterval);
-    arr.push(now);
-    spamTracker.set(key, arr);
-    if (arr.length >= CFG.spamThreshold) {
-      spamTracker.delete(key);
-      try {
-        await message.member.timeout(60000, 'Spam detected');
-        await message.channel.send({ embeds: [warnEmbed('Spam Detected', `${message.author} has been timed out for spamming.`)] });
-        await sendLog(message.guild, CFG.modLog, warnEmbed('Anti-Spam Triggered', `${message.author.tag} (${message.author.id}) muted for spam.`));
-      } catch {}
-      return;
-    }
-  }
-
-  // AFK check - remove if author was AFK
-  if (db.afk[message.author.id] && message.guild.id === db.afk[message.author.id].guild) {
-    delete db.afk[message.author.id];
-    const m = await message.channel.send({ embeds: [successEmbed('Welcome Back', `Welcome back ${message.author}, I removed your AFK status!`)] });
-    setTimeout(() => m.delete().catch(()=>{}), 5000);
-  }
-
-  // AFK check - notify if mentioned
-  if (message.mentions.users.size) {
-    for (const u of message.mentions.users.values()) {
-      if (db.afk[u.id]) {
-        const afk = db.afk[u.id];
-        const t = Math.floor((Date.now() - afk.time) / 1000);
-        const m = await message.channel.send({ embeds: [infoEmbed('User AFK', `**${u.username}** is AFK: ${afk.reason}\n⏱️ ${Math.floor(t/60)}m ago`)] });
-        setTimeout(() => m.delete().catch(()=>{}), 7000);
+      if (u.lastDaily && now - u.lastDaily < cdMs) {
+        const remaining = cdMs - (now - u.lastDaily);
+        const h = Math.floor(remaining / 3600000);
+        const m = Math.floor((remaining % 3600000) / 60000);
+        const s = Math.floor((remaining % 60000) / 1000);
+        return interaction.reply({
+          embeds: [embed({
+            title: '⏰ Already Claimed!',
+            description: `You already claimed your daily reward!\n\n**Come back in:**\n\`${h}h ${m}m ${s}s\``,
+            color: '#FF6B6B',
+          })],
+          ephemeral: true,
+        });
       }
+
+      // Streak check
+      const isStreak = u.lastDaily && (now - u.lastDaily < cdMs * 2);
+      u.streak = isStreak ? (u.streak || 0) + 1 : 1;
+      u.lastDaily = now;
+
+      const base = randomInt(CONFIG.DAILY_MIN, CONFIG.DAILY_MAX);
+      const streakBonus = Math.min(u.streak * 10, 200);
+      const total = base + streakBonus;
+      addCoins(uid, total);
+      saveDB();
+
+      await interaction.reply({
+        embeds: [embed({
+          title: '🎁 Daily Reward Claimed!',
+          description: `You received **${total}** coins! 🪙\n\n` +
+            `💰 Base: **${base}**\n` +
+            `🔥 Streak Bonus: **+${streakBonus}** (Day ${u.streak})\n` +
+            `💼 Total Balance: **${u.coins}** coins`,
+          color: '#FFD700',
+          thumbnail: interaction.user.displayAvatarURL({ dynamic: true }),
+          footer: { text: `${CONFIG.BOT_FOOTER} • Streak: ${u.streak} 🔥` },
+        })],
+      });
+
+      // Fire animation
+      const anim = await interaction.followUp({ content: '🪙', ephemeral: false });
+      const coins = ['🪙', '💰', '💵', '💎', '✨'];
+      for (let i = 0; i < 5; i++) {
+        await sleep(400);
+        await anim.edit({ content: `${coins[i % coins.length]} +${Math.floor(total / 5) * (i + 1)}` });
+      }
+      await anim.edit({ content: `✨ **+${total} coins!** ✨` });
+      setTimeout(() => anim.delete().catch(() => {}), 5000);
+    }
+
+    // ═══ BALANCE ═══
+    else if (cmd === 'balance') {
+      const u = getUser(interaction.user.id);
+      await interaction.reply({
+        embeds: [embed({
+          title: '💼 Your Wallet',
+          description: `**Balance:** ${u.coins} 🪙\n**Level:** ${u.level} ⭐\n**XP:** ${u.xp}/${u.level * 100}\n${progressBar(u.xp, u.level * 100)}`,
+          color: '#00FFAA',
+          thumbnail: interaction.user.displayAvatarURL({ dynamic: true }),
+        })],
+      });
+    }
+
+    // ═══ PROFILE ═══
+    else if (cmd === 'profile') {
+      const target = interaction.options.getUser('user') || interaction.user;
+      const u = getUser(target.id);
+      const member = await interaction.guild.members.fetch(target.id).catch(() => null);
+      const lastAct = u.lastActivity ? `<t:${Math.floor(u.lastActivity / 1000)}:R>` : 'Never';
+
+      await interaction.reply({
+        embeds: [embed({
+          title: `👤 ${target.username}'s Profile`,
+          thumbnail: target.displayAvatarURL({ dynamic: true, size: 256 }),
+          fields: [
+            { name: '💰 Coins', value: `\`${u.coins}\``, inline: true },
+            { name: '⭐ Level', value: `\`${u.level}\``, inline: true },
+            { name: '🔥 Streak', value: `\`${u.streak || 0} days\``, inline: true },
+            { name: '💬 Messages', value: `\`${u.totalMessages || 0}\``, inline: true },
+            { name: '⚠️ Warnings', value: `\`${u.warnings || 0}\``, inline: true },
+            { name: '📅 Last Active', value: lastAct, inline: true },
+            { name: '📊 XP Progress', value: `${progressBar(u.xp, u.level * 100)} \`${u.xp}/${u.level * 100}\``, inline: false },
+          ],
+          color: CONFIG.BOT_COLOR,
+        })],
+      });
+    }
+
+    // ═══ TRIVIA ═══
+    else if (cmd === 'trivia') {
+      const q = pickRandom(TRIVIA);
+      const row = new ActionRowBuilder();
+      const letters = ['🇦', '🇧', '🇨', '🇩'];
+      q.a.forEach((ans, i) => {
+        row.addComponents(
+          new ButtonBuilder()
+            .setCustomId(`trivia_${interaction.id}_${i}`)
+            .setLabel(`${letters[i]} ${ans}`)
+            .setStyle(ButtonStyle.Secondary)
+        );
+      });
+
+      const msg = await interaction.reply({
+        embeds: [embed({
+          title: '🧠 TRIVIA TIME!',
+          description: `**${q.q}**\n\n⏱️ You have **15 seconds** to answer!`,
+          color: '#9B59B6',
+          footer: { text: 'Choose your answer below!' },
+        })],
+        components: [row],
+        fetchReply: true,
+      });
+
+      client.triviaSessions = client.triviaSessions || {};
+      client.triviaSessions[interaction.id] = {
+        correct: q.correct,
+        userId: interaction.user.id,
+        answered: false,
+      };
+
+      setTimeout(async () => {
+        const session = client.triviaSessions?.[interaction.id];
+        if (!session || session.answered) return;
+        delete client.triviaSessions[interaction.id];
+        const disabledRow = new ActionRowBuilder();
+        q.a.forEach((ans, i) => {
+          disabledRow.addComponents(
+            new ButtonBuilder()
+              .setCustomId(`trivia_done_${i}`)
+              .setLabel(`${letters[i]} ${ans}`)
+              .setStyle(i === q.correct ? ButtonStyle.Success : ButtonStyle.Secondary)
+              .setDisabled(true)
+          );
+        });
+        await msg.edit({
+          embeds: [embed({
+            title: '⏰ Time\'s Up!',
+            description: `Nobody answered!\n\n**Correct Answer:** ${letters[q.correct]} ${q.a[q.correct]}`,
+            color: '#FF6B6B',
+          })],
+          components: [disabledRow],
+        }).catch(() => {});
+      }, 15000);
+    }
+
+    // ═══ FUN FACT ═══
+    else if (cmd === 'funfact') {
+      await animatedSend(interaction.channel, embed({
+        title: '🧠 Random Fun Fact',
+        description: pickRandom(FUN_FACTS),
+        color: '#F39C12',
+        footer: { text: '💡 Mind = Blown' },
+      }));
+      await interaction.reply({ content: '✅ Fun fact sent!', ephemeral: true });
+    }
+
+    // ═══ QUOTE ═══
+    else if (cmd === 'quote') {
+      await animatedSend(interaction.channel, embed({
+        title: '💫 Motivational Quote',
+        description: pickRandom(QUOTES),
+        color: '#E91E63',
+        footer: { text: '🌟 Stay motivated!' },
+      }));
+      await interaction.reply({ content: '✅ Quote sent!', ephemeral: true });
+    }
+
+    // ═══ COINFLIP ═══
+    else if (cmd === 'coinflip') {
+      await interaction.reply({
+        embeds: [embed({ title: '🪙 Flipping...', description: '** **', color: '#FFD700' })],
+      });
+      const frames = ['🪙', '🌀', '💫', '✨'];
+      for (let i = 0; i < 4; i++) {
+        await sleep(400);
+        await interaction.editReply({
+          embeds: [embed({ title: `${frames[i]} Flipping...`, description: '** **', color: '#FFD700' })],
+        });
+      }
+      const result = Math.random() < 0.5 ? 'HEADS' : 'TAILS';
+      const emoji = result === 'HEADS' ? '👑' : '🦅';
+      await interaction.editReply({
+        embeds: [embed({
+          title: `${emoji} ${result}!`,
+          description: `The coin landed on **${result}**!`,
+          color: result === 'HEADS' ? '#FFD700' : '#C0C0C0',
+        })],
+      });
+    }
+
+    // ═══ DICE ═══
+    else if (cmd === 'dice') {
+      const sides = interaction.options.getInteger('sides') || 6;
+      await interaction.reply({
+        embeds: [embed({ title: '🎲 Rolling...', description: '** **', color: '#3498DB' })],
+      });
+      const diceFrames = ['⚀', '⚁', '⚂', '⚃', '⚄', '⚅'];
+      for (let i = 0; i < 6; i++) {
+        await sleep(150);
+        await interaction.editReply({
+          embeds: [embed({
+            title: `🎲 ${diceFrames[i % 6]}`,
+            description: `Rolling a **d${sides}**...`,
+            color: '#3498DB',
+          })],
+        });
+      }
+      const roll = randomInt(1, sides);
+      await interaction.editReply({
+        embeds: [embed({
+          title: `🎲 You rolled a ${roll}!`,
+          description: `**d${sides}** → **${roll}**`,
+          color: roll === sides ? '#00FF00' : '#3498DB',
+          footer: { text: roll === sides ? '🎉 MAX ROLL!' : roll === 1 ? '😢 Minimum roll!' : '' },
+        })],
+      });
+    }
+
+    // ═══ 8BALL ═══
+    else if (cmd === '8ball') {
+      const q = interaction.options.getString('question');
+      await interaction.reply({
+        embeds: [embed({ title: '🎱 Shaking...', description: '** **', color: '#9B59B6' })],
+      });
+      await sleep(800);
+      const ans = pickRandom(EIGHTBALL);
+      await interaction.editReply({
+        embeds: [embed({
+          title: '🎱 Magic 8-Ball',
+          description: `**Question:** ${q}\n\n**Answer:** ${ans}`,
+          color: '#9B59B6',
+        })],
+      });
+    }
+
+    // ═══ HUG ═══
+    else if (cmd === 'hug') {
+      const target = interaction.options.getUser('user');
+      const msg = pickRandom(HUG_MSGS)
+        .replace('{a}', `<@${interaction.user.id}>`)
+        .replace('{b}', `<@${target.id}>`);
+      await interaction.reply({
+        embeds: [embed({
+          title: '🤗 Hug!',
+          description: msg,
+          color: '#FF69B4',
+          image: 'https://media.tenor.com/8f0r1KKQ6k8AAAAC/hug-hugs.gif',
+        })],
+      });
+    }
+
+    // ═══ WAVE ═══
+    else if (cmd === 'wave') {
+      const target = interaction.options.getUser('user');
+      const msg = pickRandom(WAVE_MSGS)
+        .replace('{a}', `<@${interaction.user.id}>`)
+        .replace('{b}', `<@${target.id}>`);
+      await interaction.reply({
+        embeds: [embed({ title: '👋 Wave!', description: msg, color: '#00BCD4' })],
+      });
+    }
+
+    // ═══ HIGHFIVE ═══
+    else if (cmd === 'highfive') {
+      const target = interaction.options.getUser('user');
+      const msg = pickRandom(HIGHFIVE_MSGS)
+        .replace('{a}', `<@${interaction.user.id}>`)
+        .replace('{b}', `<@${target.id}>`);
+      await interaction.reply({
+        embeds: [embed({ title: '🙌 High-Five!', description: msg, color: '#FF9800' })],
+      });
+    }
+
+    // ═══ NACTIVE ═══
+    else if (cmd === 'nactive') {
+      await interaction.deferReply();
+      const gid = interaction.guild.id;
+      const now = Date.now();
+      const threshold = CONFIG.INACTIVE_DAYS * 24 * 60 * 60 * 1000;
+      const act = DB.activity[gid] || {};
+
+      const members = await interaction.guild.members.fetch();
+      const inactive = [];
+
+      members.forEach(m => {
+        if (m.user.bot) return;
+        const last = act[m.id];
+        if (!last || (now - last) > threshold) inactive.push({ member: m, last });
+      });
+
+      if (inactive.length === 0) {
+        return interaction.editReply({
+          embeds: [embed({
+            title: '✅ No Inactive Members',
+            description: `Everyone has been active in the last **${CONFIG.INACTIVE_DAYS} days**! 🎉`,
+            color: '#00FF00',
+          })],
+        });
+      }
+
+      inactive.sort((a, b) => (a.last || 0) - (b.last || 0));
+      const list = inactive.slice(0, 20).map(i => {
+        const time = i.last ? `<t:${Math.floor(i.last / 1000)}:R>` : 'Never';
+        return `<@${i.member.id}> — ${time}`;
+      }).join('\n');
+
+      await interaction.editReply({
+        embeds: [embed({
+          title: `💤 Inactive Members (${inactive.length})`,
+          description: `Inactive for **${CONFIG.INACTIVE_DAYS}+ days**:\n\n${list}${inactive.length > 20 ? `\n\n*...and ${inactive.length - 20} more*` : ''}`,
+          color: '#FFA500',
+          footer: { text: `Total inactive: ${inactive.length}` },
+        })],
+      });
+    }
+
+    // ═══ RESET ACTIVITY ═══
+    else if (cmd === 'resetactivity') {
+      const target = interaction.options.getUser('user');
+      const gid = interaction.guild.id;
+      if (!DB.activity[gid]) DB.activity[gid] = {};
+      DB.activity[gid][target.id] = Date.now();
+      const u = getUser(target.id);
+      u.lastActivity = Date.now();
+      saveDB();
+      await interaction.reply({
+        embeds: [embed({
+          title: '🔄 Activity Reset',
+          description: `Successfully reset activity for **${target.username}**.`,
+          color: '#00FF00',
+        })],
+      });
+    }
+
+    // ═══ SET INACTIVE ═══
+    else if (cmd === 'setinactive') {
+      const target = interaction.options.getUser('user');
+      const gid = interaction.guild.id;
+      if (!DB.activity[gid]) DB.activity[gid] = {};
+      DB.activity[gid][target.id] = Date.now() - (CONFIG.INACTIVE_DAYS + 1) * 24 * 60 * 60 * 1000;
+      saveDB();
+      await interaction.reply({
+        embeds: [embed({
+          title: '💤 Marked Inactive',
+          description: `**${target.username}** has been marked as inactive.`,
+          color: '#FFA500',
+        })],
+      });
+    }
+
+    // ═══ WARN ═══
+    else if (cmd === 'warn') {
+      const target = interaction.options.getUser('user');
+      const reason = interaction.options.getString('reason') || 'No reason specified';
+      const u = getUser(target.id);
+      u.warnings = (u.warnings || 0) + 1;
+      saveDB();
+
+      await interaction.reply({
+        embeds: [embed({
+          title: '⚠️ User Warned',
+          description: `<@${target.id}> has been warned!\n\n**Reason:** ${reason}\n**Total Warnings:** ${u.warnings}`,
+          color: '#FF6B6B',
+          thumbnail: target.displayAvatarURL({ dynamic: true }),
+        })],
+      });
+
+      try {
+        await target.send({
+          embeds: [embed({
+            title: '⚠️ You have been warned!',
+            description: `**Server:** ${interaction.guild.name}\n**Reason:** ${reason}\n**Total Warnings:** ${u.warnings}`,
+            color: '#FF6B6B',
+          })],
+        });
+      } catch {}
+    }
+
+    // ═══ WARNINGS ═══
+    else if (cmd === 'warnings') {
+      const target = interaction.options.getUser('user');
+      const u = getUser(target.id);
+      await interaction.reply({
+        embeds: [embed({
+          title: `⚠️ ${target.username}'s Warnings`,
+          description: `**Total Warnings:** ${u.warnings || 0}`,
+          color: u.warnings > 0 ? '#FF6B6B' : '#00FF00',
+          thumbnail: target.displayAvatarURL({ dynamic: true }),
+        })],
+      });
+    }
+
+    // ═══ TOGGLE KICK ═══
+    else if (cmd === 'togglekick') {
+      const gid = interaction.guild.id;
+      if (!DB.settings[gid]) DB.settings[gid] = { autoKick: CONFIG.AUTO_KICK };
+      DB.settings[gid].autoKick = !DB.settings[gid].autoKick;
+      saveDB();
+      const state = DB.settings[gid].autoKick;
+      await interaction.reply({
+        embeds: [embed({
+          title: `${state ? '✅' : '❌'} Auto-Kick ${state ? 'Enabled' : 'Disabled'}`,
+          description: state
+            ? `Inactive members will be auto-kicked after **${CONFIG.KICK_DAYS} days**.`
+            : `Auto-kick has been disabled.`,
+          color: state ? '#00FF00' : '#FF6B6B',
+        })],
+      });
+    }
+
+    // ═══ ANNOUNCE ═══
+    else if (cmd === 'announce') {
+      const message = interaction.options.getString('message');
+      const channel = interaction.options.getChannel('channel') || interaction.channel;
+
+      await channel.send({
+        embeds: [embed({
+          title: '📢 ANNOUNCEMENT',
+          description: message,
+          color: '#FFD700',
+          author: {
+            name: interaction.user.username,
+            iconURL: interaction.user.displayAvatarURL({ dynamic: true }),
+          },
+          footer: { text: `Announced in ${interaction.guild.name}` },
+        })],
+      });
+
+      await interaction.reply({
+        embeds: [embed({
+          title: '✅ Announcement Sent',
+          description: `Your announcement has been posted in ${channel}.`,
+          color: '#00FF00',
+        })],
+        ephemeral: true,
+      });
+    }
+
+    // ═══ SERVER INFO ═══
+    else if (cmd === 'serverinfo') {
+      const g = interaction.guild;
+      const owner = await g.fetchOwner();
+      await interaction.reply({
+        embeds: [embed({
+          title: `🏰 ${g.name}`,
+          thumbnail: g.iconURL({ dynamic: true }),
+          fields: [
+            { name: '🆔 ID', value: `\`${g.id}\``, inline: true },
+            { name: '👑 Owner', value: `${owner.user.tag}`, inline: true },
+            { name: '📅 Created', value: `<t:${Math.floor(g.createdTimestamp / 1000)}:R>`, inline: true },
+            { name: '👥 Members', value: `\`${g.memberCount}\``, inline: true },
+            { name: '💬 Channels', value: `\`${g.channels.cache.size}\``, inline: true },
+            { name: '🎭 Roles', value: `\`${g.roles.cache.size}\``, inline: true },
+            { name: '😀 Emojis', value: `\`${g.emojis.cache.size}\``, inline: true },
+            { name: '🚀 Boost Level', value: `\`Level ${g.premiumTier}\``, inline: true },
+            { name: '💎 Boosts', value: `\`${g.premiumSubscriptionCount || 0}\``, inline: true },
+          ],
+          color: CONFIG.BOT_COLOR,
+        })],
+      });
+    }
+
+    // ═══ BOT INFO ═══
+    else if (cmd === 'botinfo') {
+      const uptime = process.uptime();
+      const d = Math.floor(uptime / 86400);
+      const h = Math.floor((uptime % 86400) / 3600);
+      const m = Math.floor((uptime % 3600) / 60);
+      const s = Math.floor(uptime % 60);
+
+      const mem = process.memoryUsage();
+      const memMB = (mem.heapUsed / 1024 / 1024).toFixed(2);
+
+      await interaction.reply({
+        embeds: [embed({
+          title: `🤖 ${CONFIG.BOT_NAME}`,
+          description: `Your all-in-one server management bot!`,
+          thumbnail: client.user.displayAvatarURL({ dynamic: true }),
+          fields: [
+            { name: '⏱️ Uptime', value: `\`${d}d ${h}h ${m}m ${s}s\``, inline: true },
+            { name: '🌐 Servers', value: `\`${client.guilds.cache.size}\``, inline: true },
+            { name: '👥 Users', value: `\`${client.users.cache.size}\``, inline: true },
+            { name: '📡 Ping', value: `\`${client.ws.ping}ms\``, inline: true },
+            { name: '💾 Memory', value: `\`${memMB} MB\``, inline: true },
+            { name: '📚 Commands', value: `\`${commands.length}\``, inline: true },
+            { name: '📦 discord.js', value: `\`v14\``, inline: true },
+            { name: '🟢 Node', value: `\`${process.version}\``, inline: true },
+          ],
+          color: CONFIG.BOT_COLOR,
+        })],
+      });
+    }
+
+    // ═══ LEADERBOARD ═══
+    else if (cmd === 'leaderboard') {
+      const sorted = Object.entries(DB.users)
+        .map(([id, data]) => ({ id, coins: data.coins || 0, level: data.level || 1 }))
+        .sort((a, b) => b.coins - a.coins)
+        .slice(0, 10);
+
+      const medals = ['🥇', '🥈', '🥉'];
+      const list = sorted.map((u, i) => {
+        const medal = medals[i] || `**${i + 1}.**`;
+        return `${medal} <@${u.id}> — 🪙 **${u.coins}** • ⭐ Lvl ${u.level}`;
+      }).join('\n') || 'No data yet!';
+
+      await interaction.reply({
+        embeds: [embed({
+          title: '🏆 Coin Leaderboard',
+          description: list,
+          color: '#FFD700',
+        })],
+      });
+    }
+
+    // ═══ HELP ═══
+    else if (cmd === 'help') {
+      await interaction.reply({
+        embeds: [embed({
+          title: `📖 ${CONFIG.BOT_NAME} — Commands`,
+          description: '**Everything you need to manage your server!**',
+          fields: [
+            { name: '💰 Economy', value: '`/daily` `/balance` `/profile` `/leaderboard`', inline: false },
+            { name: '🎮 Fun', value: '`/trivia` `/funfact` `/quote` `/coinflip` `/dice` `/8ball`', inline: false },
+            { name: '🤝 Social', value: '`/hug` `/wave` `/highfive`', inline: false },
+            { name: '📊 Activity', value: '`/nactive` `/resetactivity` `/setinactive` `/togglekick`', inline: false },
+            { name: '🛡️ Moderation', value: '`/warn` `/warnings` `/announce`', inline: false },
+            { name: 'ℹ️ Info', value: '`/serverinfo` `/botinfo` `/help`', inline: false },
+          ],
+          color: CONFIG.BOT_COLOR,
+          footer: { text: `${CONFIG.BOT_FOOTER} • Prefix commands also work!` },
+        })],
+      });
+    }
+  } catch (err) {
+    console.error('Interaction Error:', err);
+    if (interaction.replied || interaction.deferred) {
+      interaction.followUp({ content: '❌ An error occurred!', ephemeral: true }).catch(() => {});
+    } else {
+      interaction.reply({ content: '❌ An error occurred!', ephemeral: true }).catch(() => {});
     }
   }
+});
 
-  // Prefix command handler
-  if (!message.content.startsWith(CFG.prefix)) return;
-  const args = message.content.slice(CFG.prefix.length).trim().split(/\s+/);
+// ═══════════════ BUTTON HANDLER (Trivia) ═══════════════
+async function handleButton(interaction) {
+  if (!interaction.customId.startsWith('trivia_')) return;
+  if (interaction.customId.startsWith('trivia_done')) return;
+
+  const [, sessionId, idx] = interaction.customId.split('_');
+  const session = client.triviaSessions?.[sessionId];
+  if (!session) return interaction.reply({ content: '⏰ This trivia has expired!', ephemeral: true });
+  if (session.answered) return interaction.reply({ content: '❌ Already answered!', ephemeral: true });
+  if (interaction.user.id !== session.userId) {
+    return interaction.reply({ content: '❌ Not your trivia!', ephemeral: true });
+  }
+
+  session.answered = true;
+  const isCorrect = parseInt(idx) === session.correct;
+  const q = TRIVIA.find(t => t.correct === session.correct);
+
+  if (isCorrect) {
+    addCoins(interaction.user.id, 100);
+    addXP(interaction.user.id, 50);
+    saveDB();
+    await interaction.update({
+      embeds: [embed({
+        title: '✅ CORRECT!',
+        description: `Great job! You earned **100 coins** 🪙 and **50 XP**!`,
+        color: '#00FF00',
+        footer: { text: '🧠 Big brain energy!' },
+      })],
+      components: [],
+    });
+  } else {
+    await interaction.update({
+      embeds: [embed({
+        title: '❌ WRONG!',
+        description: `The correct answer was: **${q.a[q.correct]}**`,
+        color: '#FF0000',
+        footer: { text: '💡 Better luck next time!' },
+      })],
+      components: [],
+    });
+  }
+  delete client.triviaSessions[sessionId];
+}
+
+// ═══════════════ PREFIX COMMANDS (bonus) ═══════════════
+client.on('messageCreate', async (message) => {
+  if (message.author.bot || !message.guild) return;
+  if (!message.content.startsWith(CONFIG.PREFIX)) return;
+
+  const args = message.content.slice(CONFIG.PREFIX.length).trim().split(/ +/);
   const cmd = args.shift().toLowerCase();
 
-  // Custom commands
-  const customCmds = db.customCmds[message.guild.id] || {};
-  if (customCmds[cmd]) {
-    let resp = customCmds[cmd].response
-      .replace(/{user}/g, message.author.toString())
-      .replace(/{username}/g, message.author.username)
-      .replace(/{server}/g, message.guild.name)
-      .replace(/{count}/g, message.guild.memberCount)
-      .replace(/{channel}/g, message.channel.toString());
-    return message.reply(resp);
-  }
+  const prefixReplies = {
+    ping: async () => {
+      const sent = await message.reply('🏓 Pinging...');
+      const ping = sent.createdTimestamp - message.createdTimestamp;
+      sent.edit(`🏓 **Pong!**\n📡 Latency: \`${ping}ms\`\n💓 API: \`${client.ws.ping}ms\``);
+    },
+    hello: () => message.reply(`👋 Hello ${message.author.username}!`),
+    help: () => message.reply(`Use \`/help\` for slash commands, or type \`${CONFIG.PREFIX}ping\`, \`${CONFIG.PREFIX}hello\``),
+  };
 
-  try {
-    const handler = commands[cmd];
-    if (handler) await handler(message, args);
-  } catch (e) {
-    console.error(e);
-    message.reply({ embeds: [errorEmbed('Error', `\`\`\`${e.message}\`\`\``)] });
+  if (prefixReplies[cmd]) {
+    try { await prefixReplies[cmd](); } catch {}
   }
 });
 
-// ═══════════════════════════════════════════════════════════
-//   COMMANDS
-// ═══════════════════════════════════════════════════════════
-const commands = {};
-
-// ────── HELP ──────
-commands.help = async (message) => {
-  const embed = new EmbedBuilder()
-    .setTitle(`✨ ${CFG.name} - Command Center`)
-    .setDescription(`${animLine}\n**🎯 Prefix:** \`${CFG.prefix}\`\n${animLine}`)
-    .setColor(CFG.color)
-    .addFields(
-      { name: '🛡️ Moderation', value: '`ban` `kick` `timeout` `warn` `warnings` `clearwarns` `purge` `slowmode` `lock` `unlock` `nuke`', inline: false },
-      { name: '✅ Whitelist', value: '`whitelist add/remove/list` `badwords add/remove/list`', inline: false },
-      { name: '🎫 Tickets', value: '`ticket-panel` `ticket-close` `ticket-claim` `ticket-rate`', inline: false },
-      { name: '🎉 Giveaways', value: '`gstart` `gend` `greroll`', inline: false },
-      { name: '📢 DM System', value: '`dm` `dmall` `dmrole` `dmlogs`', inline: false },
-      { name: '👋 Welcome', value: '`setwelcome` `setgoodbye` `autorole`', inline: false },
-      { name: '💤 AFK', value: '`afk [reason]`', inline: false },
-      { name: '🎂 Birthdays', value: '`birthday set MM-DD` `birthday list`', inline: false },
-      { name: '💡 Suggestions', value: '`suggest <idea>` `setsuggestion #ch`', inline: false },
-      { name: '🛠️ Utility', value: '`weather` `translate` `convert` `qr` `poll` `remind` `ping` `stats`', inline: false },
-      { name: '📊 Info', value: '`serverinfo` `userinfo` `roleinfo` `avatar` `banner` `membercount`', inline: false },
-      { name: '⚙️ Custom Cmds', value: '`addcmd name response` `delcmd name` `listcmds`', inline: false },
-      { name: '🌐 Monitoring', value: '`monitor add url` `monitor list` `monitor remove url`', inline: false },
-      { name: '🎭 Roles', value: '`addrole` `removerole` `createrole` `deleterole`', inline: false }
-    )
-    .setFooter({ text: CFG.footer })
-    .setTimestamp();
-  message.reply({ embeds: [embed] });
-};
-
-// ────── PING ──────
-commands.ping = async (message) => {
-  const sent = await message.reply({ embeds: [infoEmbed('Pinging...', '⏳ Calculating latency...')] });
-  const ping = sent.createdTimestamp - message.createdTimestamp;
-  const ws = client.ws.ping;
-  sent.edit({ embeds: [
-    new EmbedBuilder()
-      .setTitle('🏓 Pong!')
-      .setColor(CFG.color)
-      .addFields(
-        { name: '📡 Bot Latency', value: `\`${ping}ms\``, inline: true },
-        { name: '🌐 API Latency', value: `\`${ws}ms\``, inline: true },
-        { name: '📊 Status', value: ping < 200 ? '🟢 Excellent' : ping < 500 ? '🟡 Good' : '🔴 Poor', inline: true }
-      )
-      .setFooter({ text: CFG.footer }).setTimestamp()
-  ]});
-};
-
-// ────── STATS ──────
-commands.stats = async (message) => {
-  const g = db.stats[message.guild.id] || { tickets: 0, giveaways: 0, warnings: 0 };
-  const up = process.uptime();
-  const embed = new EmbedBuilder()
-    .setTitle(`📊 ${CFG.name} Statistics`)
-    .setColor(CFG.color)
-    .addFields(
-      { name: '🤖 Bot', value: `Servers: **${client.guilds.cache.size}**\nUsers: **${client.users.cache.size}**\nUptime: **${Math.floor(up/86400)}d ${Math.floor(up%86400/3600)}h ${Math.floor(up%3600/60)}m**`, inline: true },
-      { name: '📈 Server Stats', value: `Tickets: **${g.tickets}**\nGiveaways: **${g.giveaways}**\nWarnings: **${g.warnings}**`, inline: true },
-      { name: '💾 Memory', value: `**${(process.memoryUsage().heapUsed/1024/1024).toFixed(2)} MB**`, inline: true }
-    )
-    .setFooter({ text: CFG.footer }).setTimestamp();
-  message.reply({ embeds: [embed] });
-};
-
-// ────── SERVER INFO ──────
-commands.serverinfo = async (message) => {
-  const g = message.guild;
-  const embed = new EmbedBuilder()
-    .setTitle(`📋 ${g.name}`)
-    .setThumbnail(g.iconURL({ dynamic: true, size: 256 }))
-    .setColor(CFG.color)
-    .addFields(
-      { name: '👑 Owner', value: `<@${g.ownerId}>`, inline: true },
-      { name: '🆔 ID', value: g.id, inline: true },
-      { name: '📅 Created', value: `<t:${Math.floor(g.createdTimestamp/1000)}:R>`, inline: true },
-      { name: '👥 Members', value: `${g.memberCount}`, inline: true },
-      { name: '💬 Channels', value: `${g.channels.cache.size}`, inline: true },
-      { name: '🎭 Roles', value: `${g.roles.cache.size}`, inline: true },
-      { name: '😀 Emojis', value: `${g.emojis.cache.size}`, inline: true },
-      { name: '🚀 Boosts', value: `${g.premiumSubscriptionCount || 0} (Tier ${g.premiumTier})`, inline: true },
-      { name: '🔒 Verification', value: `${g.verificationLevel}`, inline: true }
-    )
-    .setFooter({ text: CFG.footer }).setTimestamp();
-  message.reply({ embeds: [embed] });
-};
-
-// ────── USER INFO ──────
-commands.userinfo = async (message, args) => {
-  const user = message.mentions.users.first() || message.author;
-  const member = await message.guild.members.fetch(user.id).catch(() => null);
-  const embed = new EmbedBuilder()
-    .setTitle(`👤 ${user.username}`)
-    .setThumbnail(user.displayAvatarURL({ dynamic: true, size: 256 }))
-    .setColor(member?.displayHexColor || CFG.color)
-    .addFields(
-      { name: '🆔 ID', value: user.id, inline: true },
-      { name: '🤖 Bot', value: user.bot ? 'Yes' : 'No', inline: true },
-      { name: '📅 Created', value: `<t:${Math.floor(user.createdTimestamp/1000)}:R>`, inline: true },
-      { name: '📥 Joined', value: member ? `<t:${Math.floor(member.joinedTimestamp/1000)}:R>` : 'N/A', inline: true },
-      { name: '🎭 Top Role', value: member ? `${member.roles.highest}` : 'N/A', inline: true },
-      { name: '🎨 Color', value: member?.displayHexColor || 'N/A', inline: true },
-      { name: '📛 Nickname', value: member?.nickname || 'None', inline: true },
-      { name: '📋 Roles', value: member ? member.roles.cache.filter(r => r.id !== message.guild.id).map(r => r).slice(0,10).join(', ') || 'None' : 'N/A', inline: false }
-    )
-    .setFooter({ text: CFG.footer }).setTimestamp();
-  message.reply({ embeds: [embed] });
-};
-
-// ────── AVATAR ──────
-commands.avatar = async (message, args) => {
-  const user = message.mentions.users.first() || message.author;
-  const embed = new EmbedBuilder()
-    .setTitle(`🖼️ ${user.username}'s Avatar`)
-    .setImage(user.displayAvatarURL({ dynamic: true, size: 1024 }))
-    .setColor(CFG.color)
-    .setFooter({ text: CFG.footer });
-  message.reply({ embeds: [embed] });
-};
-
-// ────── BANNER ──────
-commands.banner = async (message, args) => {
-  const user = await client.users.fetch(message.mentions.users.first()?.id || message.author.id, { force: true });
-  if (!user.banner) return message.reply({ embeds: [errorEmbed('No Banner', 'This user has no banner.')] });
-  const embed = new EmbedBuilder()
-    .setTitle(`🖼️ ${user.username}'s Banner`)
-    .setImage(user.bannerURL({ dynamic: true, size: 1024 }))
-    .setColor(CFG.color).setFooter({ text: CFG.footer });
-  message.reply({ embeds: [embed] });
-};
-
-// ────── MEMBER COUNT ──────
-commands.membercount = async (message) => {
-  const g = message.guild;
-  const bots = g.members.cache.filter(m => m.user.bot).size;
-  const embed = baseEmbed('👥 Member Count', null)
-    .addFields(
-      { name: '📊 Total', value: `${g.memberCount}`, inline: true },
-      { name: '👤 Humans', value: `${g.memberCount - bots}`, inline: true },
-      { name: '🤖 Bots', value: `${bots}`, inline: true }
-    );
-  message.reply({ embeds: [embed] });
-};
-
-// ────── ROLE INFO ──────
-commands.roleinfo = async (message, args) => {
-  const role = message.mentions.roles.first() || message.guild.roles.cache.get(args[0]);
-  if (!role) return message.reply({ embeds: [errorEmbed('Not Found', 'Please mention a role.')] });
-  const embed = baseEmbed(`🎭 ${role.name}`, null)
-    .setColor(role.hexColor)
-    .addFields(
-      { name: '🆔 ID', value: role.id, inline: true },
-      { name: '🎨 Color', value: role.hexColor, inline: true },
-      { name: '👥 Members', value: `${role.members.size}`, inline: true },
-      { name: '📅 Created', value: `<t:${Math.floor(role.createdTimestamp/1000)}:R>`, inline: true },
-      { name: '📌 Position', value: `${role.position}`, inline: true },
-      { name: '💬 Mentionable', value: role.mentionable ? 'Yes' : 'No', inline: true }
-    );
-  message.reply({ embeds: [embed] });
-};
-
-// ═══════════════════════════════════════════════════════════
-//   MODERATION COMMANDS
-// ═══════════════════════════════════════════════════════════
-
-commands.ban = async (message, args) => {
-  if (!hasPerm(message.member, PermissionFlagsBits.BanMembers)) return message.reply({ embeds: [errorEmbed('No Permission', 'You cannot ban members.')] });
-  const target = message.mentions.members.first() || await message.guild.members.fetch(args[0]).catch(()=>null);
-  if (!target) return message.reply({ embeds: [errorEmbed('User Not Found', 'Please mention a user or provide ID.')] });
-  if (target.id === message.author.id) return message.reply({ embeds: [errorEmbed('Wait...', 'You cannot ban yourself!')] });
-  if (!target.bannable) return message.reply({ embeds: [errorEmbed('Cannot Ban', 'I cannot ban this user.')] });
-  const reason = args.slice(1).join(' ') || 'No reason provided';
-  await dmUser(target.user, errorEmbed('You Have Been Banned', `**Server:** ${message.guild.name}\n**Reason:** ${reason}`));
-  await target.ban({ reason });
-  const embed = successEmbed('User Banned', `**User:** ${target.user.tag}\n**Reason:** ${reason}\n**Mod:** ${message.author}`);
-  message.reply({ embeds: [embed] });
-  sendLog(message.guild, CFG.modLog, embed);
-};
-
-commands.kick = async (message, args) => {
-  if (!hasPerm(message.member, PermissionFlagsBits.KickMembers)) return message.reply({ embeds: [errorEmbed('No Permission', 'You cannot kick members.')] });
-  const target = message.mentions.members.first() || await message.guild.members.fetch(args[0]).catch(()=>null);
-  if (!target) return message.reply({ embeds: [errorEmbed('User Not Found', 'Please mention a user.')] });
-  if (!target.kickable) return message.reply({ embeds: [errorEmbed('Cannot Kick', 'I cannot kick this user.')] });
-  const reason = args.slice(1).join(' ') || 'No reason provided';
-  await dmUser(target.user, warnEmbed('You Have Been Kicked', `**Server:** ${message.guild.name}\n**Reason:** ${reason}`));
-  await target.kick(reason);
-  const embed = successEmbed('User Kicked', `**User:** ${target.user.tag}\n**Reason:** ${reason}\n**Mod:** ${message.author}`);
-  message.reply({ embeds: [embed] });
-  sendLog(message.guild, CFG.modLog, embed);
-};
-
-commands.timeout = async (message, args) => {
-  if (!hasPerm(message.member, PermissionFlagsBits.ModerateMembers)) return message.reply({ embeds: [errorEmbed('No Permission', 'You cannot timeout members.')] });
-  const target = message.mentions.members.first() || await message.guild.members.fetch(args[0]).catch(()=>null);
-  if (!target) return message.reply({ embeds: [errorEmbed('User Not Found', 'Mention a user.')] });
-  const duration = ms(args[1]);
-  if (!duration || duration > 2419200000) return message.reply({ embeds: [errorEmbed('Invalid Duration', 'Example: `10m`, `1h`, `1d` (max 28d)')] });
-  const reason = args.slice(2).join(' ') || 'No reason';
-  await target.timeout(duration, reason);
-  const embed = warnEmbed('User Timed Out', `**User:** ${target.user.tag}\n**Duration:** ${ms(duration, { long: true })}\n**Reason:** ${reason}\n**Mod:** ${message.author}`);
-  message.reply({ embeds: [embed] });
-  sendLog(message.guild, CFG.modLog, embed);
-};
-
-commands.warn = async (message, args) => {
-  if (!hasPerm(message.member, PermissionFlagsBits.ModerateMembers)) return message.reply({ embeds: [errorEmbed('No Permission', 'You cannot warn members.')] });
-  const target = message.mentions.members.first() || await message.guild.members.fetch(args[0]).catch(()=>null);
-  if (!target) return message.reply({ embeds: [errorEmbed('User Not Found', 'Mention a user.')] });
-  const reason = args.slice(1).join(' ') || 'No reason';
-  if (!db.warnings[message.guild.id]) db.warnings[message.guild.id] = {};
-  if (!db.warnings[message.guild.id][target.id]) db.warnings[message.guild.id][target.id] = [];
-  const w = { reason, mod: message.author.tag, time: Date.now(), id: Date.now().toString(36) };
-  db.warnings[message.guild.id][target.id].push(w);
-  db.stats[message.guild.id] = db.stats[message.guild.id] || { tickets:0, giveaways:0, warnings:0 };
-  db.stats[message.guild.id].warnings++;
-  saveDB();
-  const count = db.warnings[message.guild.id][target.id].length;
-  await dmUser(target.user, warnEmbed('You Have Been Warned', `**Server:** ${message.guild.name}\n**Reason:** ${reason}\n**Total Warnings:** ${count}`));
-  const embed = warnEmbed('User Warned', `**User:** ${target.user.tag}\n**Reason:** ${reason}\n**Total Warnings:** ${count}`);
-  message.reply({ embeds: [embed] });
-  sendLog(message.guild, CFG.modLog, embed);
-};
-
-commands.warnings = async (message, args) => {
-  const target = message.mentions.users.first() || message.author;
-  const warns = db.warnings[message.guild.id]?.[target.id] || [];
-  if (!warns.length) return message.reply({ embeds: [infoEmbed('No Warnings', `**${target.username}** has no warnings.`)] });
-  const list = warns.map((w, i) => `**${i+1}.** ${w.reason} — by *${w.mod}* <t:${Math.floor(w.time/1000)}:R>`).join('\n');
-  message.reply({ embeds: [warnEmbed(`${target.username}'s Warnings (${warns.length})`, list)] });
-};
-
-commands.clearwarns = async (message, args) => {
-  if (!hasPerm(message.member, PermissionFlagsBits.ModerateMembers)) return message.reply({ embeds: [errorEmbed('No Permission', 'No perms.')] });
-  const target = message.mentions.users.first();
-  if (!target) return message.reply({ embeds: [errorEmbed('Missing User', 'Mention a user.')] });
-  if (db.warnings[message.guild.id]) db.warnings[message.guild.id][target.id] = [];
-  saveDB();
-  message.reply({ embeds: [successEmbed('Warnings Cleared', `Cleared all warnings for **${target.username}**`)] });
-};
-
-commands.purge = async (message, args) => {
-  if (!hasPerm(message.member, PermissionFlagsBits.ManageMessages)) return message.reply({ embeds: [errorEmbed('No Permission', 'No perms.')] });
-  const amount = parseInt(args[0]);
-  if (!amount || amount < 1 || amount > 100) return message.reply({ embeds: [errorEmbed('Invalid Amount', '1-100')] });
-  const filterUser = message.mentions.users.first();
-  const msgs = await message.channel.messages.fetch({ limit: 100 });
-  let toDelete = msgs.filter(m => Date.now() - m.createdTimestamp < 1209600000);
-  if (filterUser) toDelete = toDelete.filter(m => m.author.id === filterUser.id);
-  const del = toDelete.first(amount);
-  const deleted = await message.channel.bulkDelete(del, true);
-  const m = await message.channel.send({ embeds: [successEmbed('Purged', `Deleted **${deleted.size}** messages${filterUser ? ` from **${filterUser.tag}**` : ''}`)] });
-  setTimeout(() => m.delete().catch(()=>{}), 5000);
-};
-
-commands.slowmode = async (message, args) => {
-  if (!hasPerm(message.member, PermissionFlagsBits.ManageChannels)) return message.reply({ embeds: [errorEmbed('No Permission', 'No perms.')] });
-  const t = args[0] === 'off' ? 0 : ms(args[0])/1000;
-  if (isNaN(t)) return message.reply({ embeds: [errorEmbed('Invalid', 'Example: `10s`, `1m`, `off`')] });
-  await message.channel.setRateLimitPerUser(t);
-  message.reply({ embeds: [successEmbed('Slowmode', t === 0 ? 'Slowmode disabled.' : `Slowmode set to **${ms(t*1000, { long: true })}**`)] });
-};
-
-commands.lock = async (message) => {
-  if (!hasPerm(message.member, PermissionFlagsBits.ManageChannels)) return message.reply({ embeds: [errorEmbed('No Permission', 'No perms.')] });
-  await message.channel.permissionOverwrites.edit(message.guild.roles.everyone, { SendMessages: false });
-  message.reply({ embeds: [successEmbed('Channel Locked', '🔒 Channel locked.')] });
-};
-
-commands.unlock = async (message) => {
-  if (!hasPerm(message.member, PermissionFlagsBits.ManageChannels)) return message.reply({ embeds: [errorEmbed('No Permission', 'No perms.')] });
-  await message.channel.permissionOverwrites.edit(message.guild.roles.everyone, { SendMessages: null });
-  message.reply({ embeds: [successEmbed('Channel Unlocked', '🔓 Channel unlocked.')] });
-};
-
-commands.nuke = async (message) => {
-  if (!hasPerm(message.member, PermissionFlagsBits.ManageChannels)) return message.reply({ embeds: [errorEmbed('No Permission', 'No perms.')] });
-  const pos = message.channel.position;
-  const clone = await message.channel.clone();
-  await message.channel.delete();
-  clone.setPosition(pos);
-  clone.send({ embeds: [successEmbed('Channel Nuked', '💥 This channel has been nuked!')] });
-};
-
-// ────── ROLE MANAGEMENT ──────
-commands.addrole = async (message, args) => {
-  if (!hasPerm(message.member, PermissionFlagsBits.ManageRoles)) return message.reply({ embeds: [errorEmbed('No Permission', 'No perms.')] });
-  const t = message.mentions.members.first();
-  const r = message.mentions.roles.first();
-  if (!t || !r) return message.reply({ embeds: [errorEmbed('Missing Args', '`addrole @user @role`')] });
-  await t.roles.add(r);
-  message.reply({ embeds: [successEmbed('Role Added', `${r} added to ${t.user.tag}`)] });
-};
-
-commands.removerole = async (message, args) => {
-  if (!hasPerm(message.member, PermissionFlagsBits.ManageRoles)) return message.reply({ embeds: [errorEmbed('No Permission', 'No perms.')] });
-  const t = message.mentions.members.first();
-  const r = message.mentions.roles.first();
-  if (!t || !r) return message.reply({ embeds: [errorEmbed('Missing Args', '`removerole @user @role`')] });
-  await t.roles.remove(r);
-  message.reply({ embeds: [successEmbed('Role Removed', `${r} removed from ${t.user.tag}`)] });
-};
-
-commands.createrole = async (message, args) => {
-  if (!hasPerm(message.member, PermissionFlagsBits.ManageRoles)) return message.reply({ embeds: [errorEmbed('No Permission', 'No perms.')] });
-  const name = args.join(' ') || 'New Role';
-  const r = await message.guild.roles.create({ name, reason: `Created by ${message.author.tag}` });
-  message.reply({ embeds: [successEmbed('Role Created', `${r} created.`)] });
-};
-
-commands.deleterole = async (message, args) => {
-  if (!hasPerm(message.member, PermissionFlagsBits.ManageRoles)) return message.reply({ embeds: [errorEmbed('No Permission', 'No perms.')] });
-  const r = message.mentions.roles.first();
-  if (!r) return message.reply({ embeds: [errorEmbed('Missing', 'Mention a role.')] });
-  await r.delete();
-  message.reply({ embeds: [successEmbed('Role Deleted', `Role **${r.name}** deleted.`)] });
-};
-
-// ═══════════════════════════════════════════════════════════
-//   WHITELIST / BADWORDS
-// ═══════════════════════════════════════════════════════════
-
-commands.whitelist = async (message, args) => {
-  if (!hasPerm(message.member, PermissionFlagsBits.Administrator)) return message.reply({ embeds: [errorEmbed('No Permission', 'Admin only.')] });
-  if (!db.whitelist[message.guild.id]) db.whitelist[message.guild.id] = [];
-  const sub = args[0]?.toLowerCase();
-  if (sub === 'add') {
-    const u = message.mentions.users.first();
-    if (!u) return message.reply({ embeds: [errorEmbed('Missing', 'Mention a user.')] });
-    if (db.whitelist[message.guild.id].includes(u.id)) return message.reply({ embeds: [warnEmbed('Already', 'User already whitelisted.')] });
-    db.whitelist[message.guild.id].push(u.id);
-    saveDB();
-    return message.reply({ embeds: [successEmbed('Whitelisted', `${u.tag} added to whitelist.`)] });
-  }
-  if (sub === 'remove') {
-    const u = message.mentions.users.first();
-    db.whitelist[message.guild.id] = db.whitelist[message.guild.id].filter(i => i !== u?.id);
-    saveDB();
-    return message.reply({ embeds: [successEmbed('Removed', `${u?.tag} removed.`)] });
-  }
-  if (sub === 'list' || !sub) {
-    const list = db.whitelist[message.guild.id].map(id => `<@${id}>`).join(', ') || 'None';
-    return message.reply({ embeds: [infoEmbed('Whitelist', list)] });
-  }
-  message.reply({ embeds: [infoEmbed('Usage', '`whitelist add/remove/list`')] });
-};
-
-commands.badwords = async (message, args) => {
-  if (!hasPerm(message.member, PermissionFlagsBits.Administrator)) return message.reply({ embeds: [errorEmbed('No Permission', 'Admin only.')] });
-  if (!db.badwords[message.guild.id]) db.badwords[message.guild.id] = [];
-  const sub = args[0]?.toLowerCase();
-  if (sub === 'add') {
-    const word = args[1]?.toLowerCase();
-    if (!word) return message.reply({ embeds: [errorEmbed('Missing', 'Provide a word.')] });
-    db.badwords[message.guild.id].push(word);
-    saveDB();
-    return message.reply({ embeds: [successEmbed('Added', `\`${word}\` added to filter.`)] });
-  }
-  if (sub === 'remove') {
-    const word = args[1]?.toLowerCase();
-    db.badwords[message.guild.id] = db.badwords[message.guild.id].filter(w => w !== word);
-    saveDB();
-    return message.reply({ embeds: [successEmbed('Removed', `\`${word}\` removed.`)] });
-  }
-  if (sub === 'list') {
-    const list = db.badwords[message.guild.id].join(', ') || 'None';
-    return message.reply({ embeds: [infoEmbed('Bad Words', list)] });
-  }
-  message.reply({ embeds: [infoEmbed('Usage', '`badwords add/remove/list <word>`')] });
-};
-
-// ═══════════════════════════════════════════════════════════
-//   AFK
-// ═══════════════════════════════════════════════════════════
-commands.afk = async (message, args) => {
-  const reason = args.join(' ') || 'AFK';
-  db.afk[message.author.id] = { reason, time: Date.now(), guild: message.guild.id };
-  saveDB();
-  message.reply({ embeds: [infoEmbed('AFK Set', `💤 **${message.author.username}** is now AFK: *${reason}*`)] });
-};
-
-// ═══════════════════════════════════════════════════════════
-//   BIRTHDAY
-// ═══════════════════════════════════════════════════════════
-commands.birthday = async (message, args) => {
-  const sub = args[0]?.toLowerCase();
-  if (sub === 'set') {
-    const date = args[1];
-    if (!date || !/^\d{2}-\d{2}$/.test(date)) return message.reply({ embeds: [errorEmbed('Invalid', 'Use `MM-DD` format, e.g. `12-25`')] });
-    if (!db.birthdays[message.guild.id]) db.birthdays[message.guild.id] = {};
-    db.birthdays[message.guild.id][message.author.id] = date;
-    saveDB();
-    return message.reply({ embeds: [successEmbed('Birthday Set', `Your birthday is set to **${date}**! 🎂`)] });
-  }
-  if (sub === 'list') {
-    const list = db.birthdays[message.guild.id] || {};
-    const text = Object.entries(list).map(([id, d]) => `<@${id}> — ${d}`).join('\n') || 'None';
-    return message.reply({ embeds: [infoEmbed('Birthdays', text)] });
-  }
-  message.reply({ embeds: [infoEmbed('Usage', '`birthday set MM-DD` or `birthday list`')] });
-};
-
-// ═══════════════════════════════════════════════════════════
-//   SUGGESTIONS
-// ═══════════════════════════════════════════════════════════
-commands.setsuggestion = async (message) => {
-  if (!hasPerm(message.member, PermissionFlagsBits.Administrator)) return message.reply({ embeds: [errorEmbed('No Perm', 'Admin only.')] });
-  const ch = message.mentions.channels.first();
-  if (!ch) return message.reply({ embeds: [errorEmbed('Missing', 'Mention a channel.')] });
-  CFG.suggestionCh = ch.id;
-  message.reply({ embeds: [successEmbed('Set', `Suggestions will go to ${ch}`)] });
-};
-
-commands.suggest = async (message, args) => {
-  const idea = args.join(' ');
-  if (!idea) return message.reply({ embeds: [errorEmbed('Missing', 'Provide your suggestion.')] });
-  const ch = CFG.suggestionCh ? message.guild.channels.cache.get(CFG.suggestionCh) : message.channel;
-  const embed = new EmbedBuilder()
-    .setTitle('💡 New Suggestion')
-    .setDescription(idea)
-    .setColor(0xFFC107)
-    .setAuthor({ name: message.author.username, iconURL: message.author.displayAvatarURL() })
-    .setFooter({ text: `Suggestion by ${message.author.tag}` })
-    .setTimestamp();
-  const msg = await ch.send({ embeds: [embed] });
-  await msg.react('👍'); await msg.react('👎');
-  db.suggestions[msg.id] = { up: 0, down: 0, author: message.author.id, idea };
-  saveDB();
-  message.reply({ embeds: [successEmbed('Suggestion Sent', `Posted in ${ch}`)] });
-};
-
-// ═══════════════════════════════════════════════════════════
-//   UTILITY - WEATHER
-// ═══════════════════════════════════════════════════════════
-commands.weather = async (message, args) => {
-  const city = args.join(' ');
-  if (!city) return message.reply({ embeds: [errorEmbed('Missing', 'Provide a city name.')] });
-  if (!CFG.weatherKey) return message.reply({ embeds: [errorEmbed('No API Key', 'Set WEATHER_API_KEY in .env')] });
-  try {
-    const { data } = await axios.get(`https://api.openweathermap.org/data/2.5/weather?q=${encodeURIComponent(city)}&appid=${CFG.weatherKey}&units=metric`);
-    const embed = new EmbedBuilder()
-      .setTitle(`🌤️ Weather in ${data.name}, ${data.sys.country}`)
-      .setThumbnail(`https://openweathermap.org/img/wn/${data.weather[0].icon}@4x.png`)
-      .setColor(CFG.color)
-      .addFields(
-        { name: '🌡️ Temp', value: `${data.main.temp}°C (feels ${data.main.feels_like}°C)`, inline: true },
-        { name: '💧 Humidity', value: `${data.main.humidity}%`, inline: true },
-        { name: '🌬️ Wind', value: `${data.wind.speed} m/s`, inline: true },
-        { name: '☁️ Condition', value: data.weather[0].description, inline: true },
-        { name: '🌅 Sunrise', value: `<t:${data.sys.sunrise}:t>`, inline: true },
-        { name: '🌇 Sunset', value: `<t:${data.sys.sunset}:t>`, inline: true }
-      )
-      .setFooter({ text: CFG.footer }).setTimestamp();
-    message.reply({ embeds: [embed] });
-  } catch {
-    message.reply({ embeds: [errorEmbed('Not Found', 'Could not fetch weather. Check city name.')] });
-  }
-};
-
-// ────── TRANSLATE ──────
-commands.translate = async (message, args) => {
-  const lang = args[0];
-  const text = args.slice(1).join(' ');
-  if (!lang || !text) return message.reply({ embeds: [errorEmbed('Usage', '`translate <lang> <text>` e.g. `translate es Hello world`')] });
-  try {
-    const { data } = await axios.get(`https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=en|${lang}`);
-    const embed = baseEmbed('🌐 Translation', null)
-      .addFields(
-        { name: '📝 Original', value: text, inline: false },
-        { name: '🎯 Translated', value: data.responseData.translatedText, inline: false }
-      );
-    message.reply({ embeds: [embed] });
-  } catch {
-    message.reply({ embeds: [errorEmbed('Failed', 'Translation failed.')] });
-  }
-};
-
-// ────── CURRENCY CONVERT ──────
-commands.convert = async (message, args) => {
-  const [amount, from, to] = args;
-  if (!amount || !from || !to) return message.reply({ embeds: [errorEmbed('Usage', '`convert <amount> <from> <to>` e.g. `convert 100 USD INR`')] });
-  try {
-    const { data } = await axios.get(`https://api.exchangerate-api.com/v4/latest/${from.toUpperCase()}`);
-    const rate = data.rates[to.toUpperCase()];
-    if (!rate) throw new Error('Invalid currency');
-    const result = (parseFloat(amount) * rate).toFixed(2);
-    const embed = baseEmbed('💱 Currency Conversion', null)
-      .addFields(
-        { name: '💰 Amount', value: `${amount} ${from.toUpperCase()}`, inline: true },
-        { name: '➡️ Result', value: `${result} ${to.toUpperCase()}`, inline: true },
-        { name: '📊 Rate', value: `1 ${from.toUpperCase()} = ${rate} ${to.toUpperCase()}`, inline: false }
-      );
-    message.reply({ embeds: [embed] });
-  } catch {
-    message.reply({ embeds: [errorEmbed('Failed', 'Conversion failed. Check currency codes.')] });
-  }
-};
-
-// ────── QR CODE ──────
-commands.qr = async (message, args) => {
-  const text = args.join(' ');
-  if (!text) return message.reply({ embeds: [errorEmbed('Missing', 'Provide text to generate QR.')] });
-  const qr = QRCode.image(text, { type: 'png', size: 10 });
-  const buffer = [];
-  qr.on('data', d => buffer.push(d));
-  qr.on('end', () => {
-    const attachment = new AttachmentBuilder(Buffer.concat(buffer), { name: 'qr.png' });
-    message.reply({ embeds: [baseEmbed('📱 QR Code', `Content: \`${text}\``).setImage('attachment://qr.png')], files: [attachment] });
-  });
-};
-
-// ────── POLL ──────
-commands.poll = async (message, args) => {
-  const q = args.join(' ');
-  if (!q) return message.reply({ embeds: [errorEmbed('Missing', 'Provide a question.')] });
-  const embed = baseEmbed('📊 Poll', q).setFooter({ text: `Poll by ${message.author.tag}` });
-  const msg = await message.channel.send({ embeds: [embed] });
-  await msg.react('1️⃣'); await msg.react('2️⃣'); await msg.react('3️⃣');
-  await msg.react('4️⃣'); await msg.react('5️⃣'); await msg.react('❌');
-};
-
-// ────── REMIND ──────
-commands.remind = async (message, args) => {
-  const time = ms(args[0]);
-  const msg = args.slice(1).join(' ');
-  if (!time || !msg) return message.reply({ embeds: [errorEmbed('Usage', '`remind <time> <message>` e.g. `remind 10m Take a break`')] });
-  const id = Date.now().toString(36);
-  db.reminders.push({ id, userId: message.author.id, channelId: message.channel.id, time: Date.now() + time, message: msg });
-  saveDB();
-  message.reply({ embeds: [successEmbed('Reminder Set', `⏰ I'll remind you in **${ms(time, { long: true })}**: ${msg}`)] });
-};
-
-async function checkReminders() {
-  const now = Date.now();
-  const due = db.reminders.filter(r => r.time <= now);
-  for (const r of due) {
-    try {
-      const ch = await client.channels.fetch(r.channelId);
-      await ch.send({ content: `<@${r.userId}>`, embeds: [warnEmbed('⏰ Reminder', r.message)] });
-    } catch {}
-  }
-  if (due.length) {
-    db.reminders = db.reminders.filter(r => r.time > now);
-    saveDB();
-  }
-}
-
-// ═══════════════════════════════════════════════════════════
-//   DM SYSTEM
-// ═══════════════════════════════════════════════════════════
-
-commands.dm = async (message, args) => {
-  if (!hasPerm(message.member, PermissionFlagsBits.Administrator)) return message.reply({ embeds: [errorEmbed('No Perm', 'Admin only.')] });
-  const u = message.mentions.users.first();
-  const text = args.slice(1).join(' ');
-  if (!u || !text) return message.reply({ embeds: [errorEmbed('Usage', '`dm @user <message>`')] });
-  const embed = new EmbedBuilder()
-    .setTitle('📩 Message from Staff')
-    .setDescription(text)
-    .setColor(CFG.color)
-    .setAuthor({ name: message.guild.name, iconURL: message.guild.iconURL() })
-    .setFooter({ text: CFG.footer }).setTimestamp();
-  const ok = await dmUser(u, embed);
-  message.reply({ embeds: [ok ? successEmbed('DM Sent', `Delivered to ${u.tag}`) : errorEmbed('Failed', 'Could not DM user.')] });
-  sendLog(message.guild, CFG.dmLog, baseEmbed('📤 DM Sent', `To: ${u.tag}\nBy: ${message.author.tag}\nMessage: ${text}`));
-};
-
-commands.dmall = async (message, args) => {
-  if (!hasPerm(message.member, PermissionFlagsBits.Administrator)) return message.reply({ embeds: [errorEmbed('No Perm', 'Admin only.')] });
-  const text = args.join(' ');
-  if (!text) return message.reply({ embeds: [errorEmbed('Usage', '`dmall <message>`')] });
-  await message.reply({ embeds: [infoEmbed('Starting', '⏳ Sending DMs to all members...')] });
-  const members = await message.guild.members.fetch();
-  let sent = 0, failed = 0;
-  for (const m of members.values()) {
-    if (m.user.bot) continue;
-    const embed = new EmbedBuilder()
-      .setTitle(`📢 Announcement from ${message.guild.name}`)
-      .setDescription(text)
-      .setColor(CFG.color).setFooter({ text: CFG.footer }).setTimestamp();
-    const ok = await dmUser(m.user, embed);
-    ok ? sent++ : failed++;
-    await sleep(1500);
-  }
-  message.channel.send({ embeds: [successEmbed('DM All Complete', `✅ Sent: **${sent}**\n❌ Failed: **${failed}**`)] });
-};
-
-commands.dmrole = async (message, args) => {
-  if (!hasPerm(message.member, PermissionFlagsBits.Administrator)) return message.reply({ embeds: [errorEmbed('No Perm', 'Admin only.')] });
-  const role = message.mentions.roles.first();
-  const text = args.slice(1).join(' ');
-  if (!role || !text) return message.reply({ embeds: [errorEmbed('Usage', '`dmrole @role <message>`')] });
-  await message.reply({ embeds: [infoEmbed('Starting', `⏳ Sending DMs to ${role.name}...`)] });
-  let sent = 0, failed = 0;
-  for (const m of role.members.values()) {
-    if (m.user.bot) continue;
-    const embed = new EmbedBuilder()
-      .setTitle(`📢 Message for ${role.name}`)
-      .setDescription(text)
-      .setColor(role.hexColor).setFooter({ text: CFG.footer }).setTimestamp();
-    const ok = await dmUser(m.user, embed);
-    ok ? sent++ : failed++;
-    await sleep(1500);
-  }
-  message.channel.send({ embeds: [successEmbed('DM Role Complete', `✅ Sent: **${sent}**\n❌ Failed: **${failed}**`)] });
-};
-
-commands.dmlogs = async (message) => {
-  if (!hasPerm(message.member, PermissionFlagsBits.Administrator)) return message.reply({ embeds: [errorEmbed('No Perm', 'Admin only.')] });
-  const logs = db.dm_logs.slice(-15).reverse();
-  if (!logs.length) return message.reply({ embeds: [infoEmbed('DM Logs', 'No DM logs yet.')] });
-  const text = logs.map(l => `**${l.type}** → ${l.target} | *${l.text.slice(0,60)}*`).join('\n');
-  message.reply({ embeds: [infoEmbed('Recent DM Logs', text)] });
-};
-
-// ═══════════════════════════════════════════════════════════
-//   GIVEAWAY SYSTEM
-// ═══════════════════════════════════════════════════════════
-
-commands.gstart = async (message, args) => {
-  if (!hasPerm(message.member, PermissionFlagsBits.ManageMessages)) return message.reply({ embeds: [errorEmbed('No Perm', 'No perms.')] });
-  const time = ms(args[0]);
-  const winners = parseInt(args[1]);
-  const prize = args.slice(2).join(' ');
-  if (!time || !winners || !prize) return message.reply({ embeds: [errorEmbed('Usage', '`gstart <time> <winners> <prize>` e.g. `gstart 1m 1 Nitro`')] });
-  const endAt = Date.now() + time;
-  const embed = new EmbedBuilder()
-    .setTitle('🎉 GIVEAWAY 🎉')
-    .setDescription(`**Prize:** ${prize}\n**Winners:** ${winners}\n**Ends:** <t:${Math.floor(endAt/1000)}:R>\n\nReact with 🎉 to enter!`)
-    .setColor(0xFF69B4)
-    .setFooter({ text: `Hosted by ${message.author.tag}` })
-    .setTimestamp(endAt);
-  const msg = await message.channel.send({ embeds: [embed] });
-  await msg.react('🎉');
-  db.giveaways[msg.id] = { prize, winners, endAt, channelId: msg.channel.id, host: message.author.id, ended: false };
-  db.stats[message.guild.id] = db.stats[message.guild.id] || { tickets:0, giveaways:0, warnings:0 };
-  db.stats[message.guild.id].giveaways++;
-  saveDB();
-};
-
-commands.gend = async (message, args) => {
-  if (!hasPerm(message.member, PermissionFlagsBits.ManageMessages)) return message.reply({ embeds: [errorEmbed('No Perm', 'No perms.')] });
-  const msgId = args[0];
-  if (!msgId || !db.giveaways[msgId]) return message.reply({ embeds: [errorEmbed('Not Found', 'Giveaway not found.')] });
-  db.giveaways[msgId].endAt = Date.now();
-  saveDB();
-  await endGiveaway(msgId);
-  message.reply({ embeds: [successEmbed('Ended', 'Giveaway ended.')] });
-};
-
-commands.greroll = async (message, args) => {
-  if (!hasPerm(message.member, PermissionFlagsBits.ManageMessages)) return message.reply({ embeds: [errorEmbed('No Perm', 'No perms.')] });
-  const msgId = args[0];
-  const g = db.giveaways[msgId];
-  if (!g) return message.reply({ embeds: [errorEmbed('Not Found', 'Giveaway not found.')] });
-  const ch = await client.channels.fetch(g.channelId);
-  const msg = await ch.messages.fetch(msgId);
-  const reaction = msg.reactions.cache.get('🎉');
-  const users = await reaction.users.fetch();
-  const eligible = users.filter(u => !u.bot).map(u => u);
-  if (!eligible.length) return message.reply({ embeds: [errorEmbed('No Entries', 'Nobody entered.')] });
-  const winner = eligible[Math.floor(Math.random()*eligible.length)];
-  ch.send({ embeds: [baseEmbed('🎉 Rerolled Winner', `Congratulations ${winner}! You won **${g.prize}**!`)] });
-};
-
-async function checkGiveaways() {
-  for (const [id, g] of Object.entries(db.giveaways)) {
-    if (!g.ended && g.endAt <= Date.now()) {
-      await endGiveaway(id);
-    }
-  }
-}
-
-async function endGiveaway(msgId) {
-  const g = db.giveaways[msgId];
-  if (!g || g.ended) return;
-  g.ended = true;
-  try {
-    const ch = await client.channels.fetch(g.channelId);
-    const msg = await ch.messages.fetch(msgId);
-    const reaction = msg.reactions.cache.get('🎉');
-    const users = reaction ? await reaction.users.fetch() : new Map();
-    const eligible = users.filter(u => !u.bot).map(u => u);
-    let winners = [];
-    for (let i = 0; i < g.winners && eligible.length; i++) {
-      const idx = Math.floor(Math.random() * eligible.length);
-      winners.push(eligible.splice(idx, 1)[0]);
-    }
-    const embed = new EmbedBuilder()
-      .setTitle('🎊 Giveaway Ended 🎊')
-      .setDescription(`**Prize:** ${g.prize}\n**Winners:** ${winners.length ? winners.map(w => `<@${w.id}>`).join(', ') : 'No valid entries'}`)
-      .setColor(0xFF69B4).setTimestamp();
-    await msg.edit({ embeds: [embed] });
-    if (winners.length) ch.send({ content: winners.map(w => `<@${w.id}>`).join(' '), embeds: [baseEmbed('🎉 Congratulations!', `You won **${g.prize}**! Contact <@${g.host}> to claim.`)] });
-  } catch (e) { console.error(e); }
-  saveDB();
-}
-
-// ═══════════════════════════════════════════════════════════
-//   TICKET SYSTEM
-// ═══════════════════════════════════════════════════════════
-
-commands['ticket-panel'] = async (message) => {
-  if (!hasPerm(message.member, PermissionFlagsBits.Administrator)) return message.reply({ embeds: [errorEmbed('No Perm', 'Admin only.')] });
-  const embed = new EmbedBuilder()
-    .setTitle('🎫 Support Ticket System')
-    .setDescription(`${animLine}\n**Need help?** Create a ticket below!\n\n**Available Categories:**\n🛠️ General Support\n🐛 Bug Report\n💰 Billing Issue\n📋 Other\n${animLine}`)
-    .setColor(CFG.color)
-    .setFooter({ text: CFG.footer })
-    .setTimestamp();
-  const menu = new StringSelectMenuBuilder()
-    .setCustomId('ticket_create')
-    .setPlaceholder('🎫 Select a ticket category...')
-    .addOptions(
-      new StringSelectMenuOptionBuilder().setLabel('General Support').setValue('general').setEmoji('🛠️').setDescription('Get help with general issues'),
-      new StringSelectMenuOptionBuilder().setLabel('Bug Report').setValue('bug').setEmoji('🐛').setDescription('Report a bug'),
-      new StringSelectMenuOptionBuilder().setLabel('Billing Issue').setValue('billing').setEmoji('💰').setDescription('Billing related'),
-      new StringSelectMenuOptionBuilder().setLabel('Other').setValue('other').setEmoji('📋').setDescription('Anything else')
-    );
-  const row = new ActionRowBuilder().addComponents(menu);
-  message.channel.send({ embeds: [embed], components: [row] });
-};
-
-commands['ticket-close'] = async (message) => {
-  const t = db.tickets[message.channel.id];
-  if (!t) return message.reply({ embeds: [errorEmbed('Not a Ticket', 'This is not a ticket channel.')] });
-  const embed = warnEmbed('Closing Ticket', '⏳ Generating transcript and closing in 5 seconds...');
-  await message.reply({ embeds: [embed] });
-  await sleep(5000);
-  delete db.tickets[message.channel.id];
-  saveDB();
-  message.channel.delete().catch(()=>{});
-};
-
-commands['ticket-claim'] = async (message) => {
-  const t = db.tickets[message.channel.id];
-  if (!t) return message.reply({ embeds: [errorEmbed('Not a Ticket', 'This is not a ticket.')] });
-  if (t.claimed) return message.reply({ embeds: [warnEmbed('Already Claimed', `Claimed by <@${t.claimed}>`)] });
-  t.claimed = message.author.id;
-  saveDB();
-  message.reply({ embeds: [successEmbed('Ticket Claimed', `🎯 Claimed by ${message.author}`)] });
-};
-
-commands['ticket-rate'] = async (message, args) => {
-  const r = parseInt(args[0]);
-  if (!r || r < 1 || r > 5) return message.reply({ embeds: [errorEmbed('Invalid', 'Rate 1-5 stars.')] });
-  const t = db.tickets[message.channel.id];
-  if (t) { t.rating = r; saveDB(); }
-  message.reply({ embeds: [successEmbed('Thanks!', `You rated support: ${'⭐'.repeat(r)}`)] });
-};
-
-// ═══════════════════════════════════════════════════════════
-//   CUSTOM COMMANDS
-// ═══════════════════════════════════════════════════════════
-
-commands.addcmd = async (message, args) => {
-  if (!hasPerm(message.member, PermissionFlagsBits.Administrator)) return message.reply({ embeds: [errorEmbed('No Perm', 'Admin only.')] });
-  const name = args[0]?.toLowerCase();
-  const resp = args.slice(1).join(' ');
-  if (!name || !resp) return message.reply({ embeds: [errorEmbed('Usage', '`addcmd <name> <response>`\nPlaceholders: `{user}` `{username}` `{server}` `{count}` `{channel}`')] });
-  if (!db.customCmds[message.guild.id]) db.customCmds[message.guild.id] = {};
-  db.customCmds[message.guild.id][name] = { response: resp, creator: message.author.id };
-  saveDB();
-  message.reply({ embeds: [successEmbed('Command Added', `\`${CFG.prefix}${name}\` is now a custom command!`)] });
-};
-
-commands.delcmd = async (message, args) => {
-  if (!hasPerm(message.member, PermissionFlagsBits.Administrator)) return message.reply({ embeds: [errorEmbed('No Perm', 'Admin only.')] });
-  const name = args[0]?.toLowerCase();
-  if (!db.customCmds[message.guild.id]?.[name]) return message.reply({ embeds: [errorEmbed('Not Found', 'Command not found.')] });
-  delete db.customCmds[message.guild.id][name];
-  saveDB();
-  message.reply({ embeds: [successEmbed('Deleted', `\`${name}\` removed.`)] });
-};
-
-commands.listcmds = async (message) => {
-  const cmds = Object.keys(db.customCmds[message.guild.id] || {});
-  message.reply({ embeds: [infoEmbed('Custom Commands', cmds.map(c => `\`${CFG.prefix}${c}\``).join(', ') || 'None yet')] });
-};
-
-// ═══════════════════════════════════════════════════════════
-//   WEBSITE MONITOR
-// ═══════════════════════════════════════════════════════════
-const monitors = []; // { url, channelId, guildId, lastUp }
-
-commands.monitor = async (message, args) => {
-  if (!hasPerm(message.member, PermissionFlagsBits.Administrator)) return message.reply({ embeds: [errorEmbed('No Perm', 'Admin only.')] });
-  const sub = args[0]?.toLowerCase();
-  if (sub === 'add') {
-    const url = args[1];
-    if (!url) return message.reply({ embeds: [errorEmbed('Missing', 'Provide URL.')] });
-    monitors.push({ url, channelId: message.channel.id, guildId: message.guild.id, lastUp: true });
-    return message.reply({ embeds: [successEmbed('Monitoring', `Now monitoring: ${url}`)] });
-  }
-  if (sub === 'list') {
-    return message.reply({ embeds: [infoEmbed('Monitors', monitors.map(m => `${m.url} → <#${m.channelId}>`).join('\n') || 'None')] });
-  }
-  if (sub === 'remove') {
-    const i = monitors.findIndex(m => m.url === args[1]);
-    if (i >= 0) monitors.splice(i, 1);
-    return message.reply({ embeds: [successEmbed('Removed', 'Monitor removed.')] });
-  }
-  message.reply({ embeds: [infoEmbed('Usage', '`monitor add/list/remove <url>`')] });
-};
-
+// ═══════════════ AUTO-KICK LOOP ═══════════════
 setInterval(async () => {
-  for (const m of monitors) {
+  for (const guild of client.guilds.cache.values()) {
+    const settings = DB.settings[guild.id];
+    if (!settings || !settings.autoKick) continue;
+
     try {
-      const res = await axios.get(m.url, { timeout: 5000 }).catch(e => e.response || { status: 500 });
-      const isUp = res.status >= 200 && res.status < 400;
-      if (m.lastUp && !isUp) {
-        const ch = await client.channels.fetch(m.channelId).catch(()=>null);
-        if (ch) ch.send({ embeds: [errorEmbed('🔴 Website Down', `**URL:** ${m.url}\n**Status:** ${res.status}`)] });
-        m.lastUp = false;
-      } else if (!m.lastUp && isUp) {
-        const ch = await client.channels.fetch(m.channelId).catch(()=>null);
-        if (ch) ch.send({ embeds: [successEmbed('🟢 Website Up', `**URL:** ${m.url}`)] });
-        m.lastUp = true;
+      const members = await guild.members.fetch();
+      const now = Date.now();
+      const threshold = CONFIG.KICK_DAYS * 24 * 60 * 60 * 1000;
+      const act = DB.activity[guild.id] || {};
+
+      for (const m of members.values()) {
+        if (m.user.bot || m.id === guild.ownerId) continue;
+        const last = act[m.id];
+        if (last && (now - last) > threshold) {
+          try {
+            await m.kick(`Inactive for ${CONFIG.KICK_DAYS}+ days (auto-kick)`);
+            console.log(`👢 Kicked ${m.user.tag} from ${guild.name}`);
+          } catch {}
+        }
       }
     } catch {}
   }
-}, 60000);
+}, 60 * 60 * 1000); // every hour
 
-// ═══════════════════════════════════════════════════════════
-//   GREETINGS (WELCOME / GOODBYE)
-// ═══════════════════════════════════════════════════════════
-
+// ═══════════════ WELCOME MESSAGES ═══════════════
 client.on('guildMemberAdd', async (member) => {
-  // Auto role
-  if (CFG.autoRole) {
-    try {
-      const r = member.guild.roles.cache.get(CFG.autoRole);
-      if (r) await member.roles.add(r);
-    } catch {}
-  }
-  // Welcome
-  if (CFG.welcomeCh) {
-    const ch = member.guild.channels.cache.get(CFG.welcomeCh);
-    if (ch) {
-      const msg = CFG.welcomeMsg
-        .replace(/{user}/g, member.toString())
-        .replace(/{username}/g, member.user.username)
-        .replace(/{server}/g, member.guild.name)
-        .replace(/{count}/g, member.guild.memberCount);
-      const embed = new EmbedBuilder()
-        .setTitle(`👋 Welcome to ${member.guild.name}!`)
-        .setDescription(msg)
-        .setColor(0x57F287)
-        .setThumbnail(member.user.displayAvatarURL({ dynamic: true, size: 256 }))
-        .setFooter({ text: `${CFG.footer} • Member #${member.guild.memberCount}` })
-        .setTimestamp();
-      ch.send({ embeds: [embed] }).catch(()=>{});
-    }
-  }
-  // Join log
-  if (CFG.joinLog) {
-    const ch = member.guild.channels.cache.get(CFG.joinLog);
-    if (ch) ch.send({ embeds: [baseEmbed('📥 Member Joined', `**User:** ${member.user.tag} (${member.id})\n**Account Created:** <t:${Math.floor(member.user.createdTimestamp/1000)}:R>`)] }).catch(()=>{});
-  }
-});
-
-client.on('guildMemberRemove', async (member) => {
-  if (CFG.goodbyeCh) {
-    const ch = member.guild.channels.cache.get(CFG.goodbyeCh);
-    if (ch) {
-      const msg = CFG.goodbyeMsg
-        .replace(/{user}/g, member.user.username)
-        .replace(/{username}/g, member.user.username)
-        .replace(/{server}/g, member.guild.name);
-      const embed = new EmbedBuilder()
-        .setTitle('👋 Goodbye!')
-        .setDescription(msg)
-        .setColor(0xED4245)
-        .setThumbnail(member.user.displayAvatarURL({ dynamic: true }))
-        .setFooter({ text: CFG.footer })
-        .setTimestamp();
-      ch.send({ embeds: [embed] }).catch(()=>{});
-    }
-  }
-});
-
-// ═══════════════════════════════════════════════════════════
-//   STARBOARD
-// ═══════════════════════════════════════════════════════════
-client.on('messageReactionAdd', async (reaction, user) => {
-  if (user.bot) return;
-  if (reaction.partial) { try { await reaction.fetch(); } catch { return; } }
-  if (reaction.emoji.name !== CFG.starEmoji) return;
-  if (reaction.count < CFG.starThreshold) return;
-  if (!CFG.starboard) return;
-  const msg = reaction.message;
-  if (msg.channel.id === CFG.starboard) return;
-  if (db.starboard[msg.id]) return;
-  const ch = msg.guild.channels.cache.get(CFG.starboard);
+  const chId = CONFIG.WELCOME_CH;
+  if (!chId) return;
+  const ch = member.guild.channels.cache.get(chId);
   if (!ch) return;
-  const embed = new EmbedBuilder()
-    .setColor(0xFFD700)
-    .setAuthor({ name: msg.author.tag, iconURL: msg.author.displayAvatarURL() })
-    .setDescription(msg.content || '*No content*')
-    .addFields({ name: 'Original', value: `[Jump to message](${msg.url})` })
-    .setFooter({ text: `${CFG.starEmoji} ${reaction.count} | #${msg.channel.name}` })
-    .setTimestamp(msg.createdTimestamp);
-  if (msg.attachments.size) embed.setImage(msg.attachments.first().url);
-  const sent = await ch.send({ embeds: [embed] });
-  db.starboard[sent.id] = msg.id;
-  saveDB();
-});
 
-// ═══════════════════════════════════════════════════════════
-//   ANTI-NUKE (Channel/Role delete protection)
-// ═══════════════════════════════════════════════════════════
-client.on('channelDelete', async (channel) => {
-  if (!CFG.antiNuke || !channel.guild) return;
-  const audits = await channel.guild.fetchAuditLogs({ limit: 1, type: 12 }).catch(() => null);
-  const entry = audits?.entries.first();
-  if (!entry || Date.now() - entry.createdTimestamp > 10000) return;
-  const exec = entry.executor;
-  if (!exec || exec.id === client.user.id) return;
-  const member = await channel.guild.members.fetch(exec.id).catch(()=>null);
-  if (!member || isWhitelisted(channel.guild.id, member.id)) return;
-  // Track
-  const key = `${channel.guild.id}-${exec.id}`;
-  const now = Date.now();
-  const arr = (nukeTracker.get(key) || []).filter(t => now - t < CFG.nukeInterval);
-  arr.push(now);
-  nukeTracker.set(key, arr);
-  if (arr.length >= CFG.nukeThreshold) {
-    try {
-      await member.roles.set([], 'Anti-Nuke: Mass channel deletion');
-      await member.kick('Anti-Nuke triggered');
-    } catch {}
-    const logEmbed = errorEmbed('🚨 ANTI-NUKE TRIGGERED', `**User:** ${exec.tag}\n**Action:** Mass channel deletion\n**Punishment:** Removed all roles + kicked`);
-    sendLog(channel.guild, CFG.modLog, logEmbed);
-  }
-});
-
-client.on('roleDelete', async (role) => {
-  if (!CFG.antiNuke) return;
-  const audits = await role.guild.fetchAuditLogs({ limit: 1, type: 32 }).catch(() => null);
-  const entry = audits?.entries.first();
-  if (!entry || Date.now() - entry.createdTimestamp > 10000) return;
-  const exec = entry.executor;
-  if (!exec || exec.id === client.user.id) return;
-  const member = await role.guild.members.fetch(exec.id).catch(()=>null);
-  if (!member || isWhitelisted(role.guild.id, member.id)) return;
-  const key = `${role.guild.id}-${exec.id}-role`;
-  const now = Date.now();
-  const arr = (nukeTracker.get(key) || []).filter(t => now - t < CFG.nukeInterval);
-  arr.push(now);
-  nukeTracker.set(key, arr);
-  if (arr.length >= CFG.nukeThreshold) {
-    try {
-      await member.roles.set([], 'Anti-Nuke: Mass role deletion');
-      await member.kick('Anti-Nuke triggered');
-    } catch {}
-    sendLog(role.guild, CFG.modLog, errorEmbed('🚨 ANTI-NUKE (Roles)', `**User:** ${exec.tag}\n**Action:** Mass role deletion`));
-  }
-});
-
-// ═══════════════════════════════════════════════════════════
-//   INTERACTIONS (Tickets, Buttons, Menus)
-// ═══════════════════════════════════════════════════════════
-
-client.on('interactionCreate', async (interaction) => {
-  // Ticket create via select menu
-  if (interaction.isStringSelectMenu() && interaction.customId === 'ticket_create') {
-    await interaction.deferReply({ ephemeral: true });
-    const type = interaction.values[0];
-    const guild = interaction.guild;
-    const existing = Object.entries(db.tickets).find(([id, t]) => t.user === interaction.user.id && t.guild === guild.id);
-    if (existing) {
-      return interaction.editReply({ embeds: [errorEmbed('Already Open', `You already have a ticket: <#${existing[0]}>`)] });
-    }
-    const chName = `ticket-${interaction.user.username.toLowerCase().replace(/[^a-z0-9]/g,'').slice(0,15)}-${Math.floor(Math.random()*1000)}`;
-    const overwrites = [
-      { id: guild.id, deny: [PermissionFlagsBits.ViewChannel] },
-      { id: interaction.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] }
-    ];
-    if (CFG.ticketRole) overwrites.push({ id: CFG.ticketRole, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] });
-    const ch = await guild.channels.create({
-      name: chName, type: ChannelType.GuildText,
-      parent: CFG.ticketCat || null, permissionOverwrites: overwrites,
-      topic: `Ticket by ${interaction.user.tag} | Type: ${type}`
+  try {
+    await ch.send({
+      embeds: [embed({
+        title: '🎉 Welcome!',
+        description: `Hey ${member}, welcome to **${member.guild.name}**!\n\nYou're member **#${member.guild.memberCount}**! 🎊`,
+        color: '#00FF00',
+        thumbnail: member.user.displayAvatarURL({ dynamic: true, size: 256 }),
+        footer: { text: '✨ We\'re glad to have you!' },
+      })],
     });
-    db.tickets[ch.id] = { user: interaction.user.id, guild: guild.id, type, claimed: null, rating: null, created: Date.now() };
-    db.stats[guild.id] = db.stats[guild.id] || { tickets:0, giveaways:0, warnings:0 };
-    db.stats[guild.id].tickets++;
-    db.tickets_counter++;
-    saveDB();
-    const embed = new EmbedBuilder()
-      .setTitle(`🎫 Ticket #${db.tickets_counter} — ${type.toUpperCase()}`)
-      .setDescription(`Hello ${interaction.user}, thanks for opening a ticket!\n\n**Category:** ${type}\n**Support team will be with you shortly.**\n\nUse \`${CFG.prefix}ticket-close\` to close this ticket.`)
-      .setColor(CFG.color)
-      .setFooter({ text: CFG.footer }).setTimestamp();
-    const btns = new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId('ticket_close_btn').setLabel('Close').setEmoji('🔒').setStyle(ButtonStyle.Danger),
-      new ButtonBuilder().setCustomId('ticket_claim_btn').setLabel('Claim').setEmoji('🎯').setStyle(ButtonStyle.Success)
-    );
-    await ch.send({ content: `<@${interaction.user.id}>${CFG.ticketRole ? ` <@&${CFG.ticketRole}>` : ''}`, embeds: [embed], components: [btns] });
-    interaction.editReply({ embeds: [successEmbed('Ticket Created', `Your ticket: ${ch}`)] });
-    if (CFG.ticketLog) {
-      const logCh = guild.channels.cache.get(CFG.ticketLog);
-      if (logCh) logCh.send({ embeds: [infoEmbed('🎫 Ticket Created', `**User:** ${interaction.user.tag}\n**Type:** ${type}\n**Channel:** ${ch}`)] });
-    }
-  }
-
-  // Buttons
-  if (interaction.isButton()) {
-    if (interaction.customId === 'ticket_close_btn') {
-      const t = db.tickets[interaction.channel.id];
-      if (!t) return interaction.reply({ embeds: [errorEmbed('Not a Ticket', 'N/A')], ephemeral: true });
-      if (interaction.user.id !== t.user && !interaction.member.permissions.has(PermissionFlagsBits.ManageChannels)) {
-        return interaction.reply({ embeds: [errorEmbed('No Perm', 'Only ticket owner or staff.')], ephemeral: true });
-      }
-      await interaction.reply({ embeds: [warnEmbed('Closing', '🔒 Closing in 5 seconds...')] });
-      await sleep(5000);
-      delete db.tickets[interaction.channel.id];
-      saveDB();
-      interaction.channel.delete().catch(()=>{});
-    }
-    if (interaction.customId === 'ticket_claim_btn') {
-      const t = db.tickets[interaction.channel.id];
-      if (!t) return interaction.reply({ embeds: [errorEmbed('Not a Ticket', 'N/A')], ephemeral: true });
-      if (t.claimed) return interaction.reply({ embeds: [warnEmbed('Already Claimed', `By <@${t.claimed}>`)], ephemeral: true });
-      t.claimed = interaction.user.id;
-      saveDB();
-      interaction.reply({ embeds: [successEmbed('Claimed', `🎯 Claimed by ${interaction.user}`)] });
-    }
-  }
+  } catch {}
 });
 
-// ═══════════════════════════════════════════════════════════
-//   BIRTHDAY CHECKER
-// ═══════════════════════════════════════════════════════════
-async function checkBirthdays() {
-  const now = new Date();
-  const mmdd = `${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`;
-  for (const [guildId, list] of Object.entries(db.birthdays)) {
-    for (const [userId, date] of Object.entries(list)) {
-      if (date === mmdd) {
-        try {
-          const guild = await client.guilds.fetch(guildId);
-          const member = await guild.members.fetch(userId).catch(()=>null);
-          if (member) {
-            const genCh = guild.channels.cache.find(c => c.name.includes('general') && c.type === ChannelType.GuildText) || guild.systemChannel;
-            if (genCh) genCh.send({ embeds: [
-              new EmbedBuilder()
-                .setTitle('🎂 Happy Birthday! 🎉')
-                .setDescription(`🎈 Let's all wish **${member.user.username}** a very Happy Birthday! 🎁🎊`)
-                .setColor(0xFF69B4)
-                .setThumbnail(member.user.displayAvatarURL({ dynamic: true }))
-                .setFooter({ text: CFG.footer }).setTimestamp()
-            ]});
-          }
-        } catch {}
-      }
-    }
-  }
+// ═══════════════ SAVE DATA ON EXIT ═══════════════
+process.on('SIGINT', () => { saveDB(); console.log('\n💾 Data saved. Bye!'); process.exit(0); });
+process.on('SIGTERM', () => { saveDB(); process.exit(0); });
+setInterval(saveDB, 5 * 60 * 1000); // autosave every 5 mins
+
+// ═══════════════ LOGIN ═══════════════
+if (!CONFIG.TOKEN) {
+  console.error('❌ TOKEN missing in .env file!');
+  process.exit(1);
 }
 
-// ═══════════════════════════════════════════════════════════
-//   ERROR HANDLING
-// ═══════════════════════════════════════════════════════════
-process.on('unhandledRejection', (err) => console.error('Unhandled:', err));
-process.on('uncaughtException', (err) => console.error('Uncaught:', err));
-
-// ═══════════════════════════════════════════════════════════
-//   LOGIN
-// ═══════════════════════════════════════════════════════════
-client.login(CFG.token).catch(e => {
-  console.error('❌ Login failed! Check BOT_TOKEN in .env');
-  process.exit(1);
-});
+client.login(CONFIG.TOKEN);
